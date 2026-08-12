@@ -1,0 +1,6 @@
+{
+  "name": "DepotDownloader Mobile",
+  "description": "Mobile GUI wrapper for DepotDownloader CLI to manage downloading Steam games directly to local storage or USB drives via SAF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
