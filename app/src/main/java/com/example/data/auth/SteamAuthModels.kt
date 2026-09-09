@@ -67,9 +67,14 @@ sealed class AuthState {
         val guardType: Int,
         val promptMessage: String,
         val availableTypes: List<Int>,
-        val rememberMe: Boolean
+        val rememberMe: Boolean,
+        /** True while device-confirmation is polling but the user asked for a
+         *  manual code field ("enter code instead" — sent via the CM session
+         *  with sendSteamGuardCode, same as the desktop client). */
+        val showCodeField: Boolean = false
     ) : AuthState() {
-        val codeEntrySupported: Boolean get() = SteamGuardType.supportsCodeEntry(guardType)
+        val codeEntrySupported: Boolean
+            get() = SteamGuardType.supportsCodeEntry(guardType) || showCodeField
     }
 
     /** Signed in and able to use the library/downloads. */

@@ -33,6 +33,9 @@ loggingInterceptor = "4.10.0"
 okhttp = "4.10.0"
 moshiKotlin = "1.15.2"
 moshiKotlinCodegen = "1.15.2"
+javasteam = "1.8.0"
+zstdJni = "1.5.7-5"
+xz = "1.10"
 datastorePreferences = "1.1.7"
 robolectric = "4.16.1"
 roborazzi = "1.59.0"
@@ -84,6 +87,11 @@ logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-intercep
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshiKotlin" }
 moshi-kotlin-codegen = { group = "com.squareup.moshi", name = "moshi-kotlin-codegen", version.ref = "moshiKotlinCodegen" }
+in-dragonbra-javasteam = { group = "in.dragonbra", name = "javasteam", version.ref = "javasteam" }
+in-dragonbra-javasteam-depotdownloader = { group = "in.dragonbra", name = "javasteam-depotdownloader", version.ref = "javasteam" }
+com-github-luben-zstd-jni = { group = "com.github.luben", name = "zstd-jni", version.ref = "zstdJni" }
+org-tukaani-xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
+kotlinx-coroutines-jdk8 = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-jdk8", version.ref = "kotlinxCoroutinesCore" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }

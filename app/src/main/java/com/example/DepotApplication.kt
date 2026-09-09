@@ -9,13 +9,15 @@ import com.example.data.db.AppDatabase
 import com.example.data.download.DepotDownloadManager
 import com.example.data.repository.SteamRepository
 import com.example.data.repository.UserPreferencesRepository
+import com.example.data.steam.SteamRuntime
 
 /**
  * Application class acting as the single, app-scoped service locator.
  *
- * Holds long-lived singletons (auth session, download engine, database) so the
- * login session and an active / paused download survive navigation and UI
- * recreation, exactly like the Steam desktop client.
+ * Holds long-lived singletons (auth session, native Steam CM runtime,
+ * download engine, database) so the login session and an active / paused
+ * download survive navigation and UI recreation, exactly like the Steam
+ * desktop client.
  */
 class DepotApplication : Application() {
 
@@ -26,6 +28,10 @@ class DepotApplication : Application() {
         private set
 
     lateinit var steamApi: SteamApiService
+        private set
+
+    /** Native Steam client (CM protocol connection + licenses + PICS). */
+    lateinit var steamRuntime: SteamRuntime
         private set
 
     lateinit var authManager: SteamAuthManager
@@ -44,17 +50,20 @@ class DepotApplication : Application() {
         database = AppDatabase.getDatabase(this)
         steamApi = SteamApiService.create()
 
+        // Native CM runtime first — auth and downloads both ride on it.
+        steamRuntime = SteamRuntime(this)
+
         authManager = SteamAuthManager(
             vault = CredentialVault(this),
+            runtime = steamRuntime,
             onSessionEstablished = { session -> prefs.saveSteamUsername(session.accountName) }
         )
 
         steamRepository = SteamRepository(steamApi, database.steamGameDao())
         downloadManager = DepotDownloadManager(
             context = this,
-            api = steamApi,
-            initialTargetTreeUri = prefs.targetUri.value.takeIf { it.isNotBlank() },
-            initialTargetDisplay = prefs.targetDisplayPath.value
+            runtime = steamRuntime,
+            api = steamApi
         )
 
         // Restore a remembered Steam session (kept login) if one exists.

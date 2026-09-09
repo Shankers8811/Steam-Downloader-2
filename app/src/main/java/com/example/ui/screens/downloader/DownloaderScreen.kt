@@ -1,9 +1,5 @@
 package com.example.ui.screens.downloader
 
-import android.content.Intent
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,15 +51,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.download.DepotFileProgress
-import com.example.data.download.DepotFileStatus
+import com.example.data.download.DepotProgress
 import com.example.data.download.SessionPhase
 import com.example.data.model.DlcMode
 import com.example.data.model.LicenseReport
@@ -89,11 +83,11 @@ import com.example.ui.util.FormatUtils
 fun DownloaderScreen(
     viewModel: DownloaderViewModel
 ) {
-    val context = LocalContext.current
+
 
     val state by viewModel.sessionState.collectAsStateWithLifecycle()
     val accountName by viewModel.accountName.collectAsStateWithLifecycle()
-    val targetDisplayPath by viewModel.targetDisplayPath.collectAsStateWithLifecycle()
+    val installRootDisplay by viewModel.installRootDisplay.collectAsStateWithLifecycle()
     val statusNotification by viewModel.statusNotification.collectAsStateWithLifecycle()
 
     val appIdInput by viewModel.appIdInput.collectAsStateWithLifecycle()
@@ -111,21 +105,6 @@ fun DownloaderScreen(
         statusNotification?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearNotification()
-        }
-    }
-
-    val dirPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            try {
-                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                context.contentResolver.takePersistableUriPermission(uri, flags)
-            } catch (_: Exception) {
-            }
-            val folderName = uri.lastPathSegment?.substringAfterLast(":") ?: "Selected Directory"
-            val display = if (uri.toString().contains("primary")) "Phone Storage / $folderName" else "USB / OTG Drive / $folderName"
-            viewModel.setTargetDirectory(uri, display)
         }
     }
 
@@ -326,7 +305,7 @@ fun DownloaderScreen(
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(
-                                text = "WRITING  ${state.currentFile}",
+                                text = "INSTALLED  ${state.currentFile}",
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
@@ -334,8 +313,8 @@ fun DownloaderScreen(
                                 maxLines = 1
                             )
                             Text(
-                                text = "chunk ${state.currentFileChunkIndex} of ${state.currentFileChunkCount} " +
-                                    "(${FormatUtils.formatBytes(state.currentFileChunkIndex.toLong() * 1024 * 1024)} committed at chunk boundaries)",
+                                text = "${state.completeFileCount} files whole & verified — " +
+                                    "chunks are checksum-verified before they reach disk",
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 color = TextSecondaryLight,
@@ -540,27 +519,20 @@ fun DownloaderScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = targetDisplayPath,
-                                fontSize = 13.sp,
+                                text = installRootDisplay,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
                                 color = Color.White,
-                                maxLines = 1
+                                maxLines = 2
                             )
                             Text(
-                                text = "Partial downloads are isolated in steam_staging — only complete files land here",
+                                text = "Real filesystem path — your PC sees this folder over USB (Android/data). Chunks resume; files are complete when listed below.",
                                 fontSize = 10.sp,
                                 color = TextSecondaryDark,
-                                maxLines = 1
+                                maxLines = 3
                             )
                         }
-                    }
-                    Button(
-                        onClick = { dirPickerLauncher.launch(null) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.testTag("select_saf_directory_button")
-                    ) {
-                        Text("CHANGE", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -667,8 +639,8 @@ fun DownloaderScreen(
                 }
             }
 
-            // ---------------- Files on disk ----------------
-            if (state.files.isNotEmpty()) {
+            // ---------------- Depots & installed files ----------------
+            if (state.depots.isNotEmpty()) {
                 EditorialGlassCard(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier
@@ -685,7 +657,7 @@ fun DownloaderScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "FILES  ${state.completeFileCount}/${state.fileCount} INSTALLED",
+                                text = "DEPOTS  ${state.depots.count { it.completed }}/${state.depots.size} • ${state.completeFileCount} FILES INSTALLED",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 color = Color.White,
@@ -702,8 +674,21 @@ fun DownloaderScreen(
 
                     AnimatedVisibility(visible = isFilesExpanded) {
                         Column(modifier = Modifier.padding(top = 12.dp)) {
-                            state.files.forEach { file ->
-                                DepotFileRow(file = file)
+                            state.depots.forEach { depot ->
+                                DepotProgressRow(depot = depot)
+                            }
+                            if (state.recentFiles.isNotEmpty()) {
+                                Text(
+                                    text = "RECENTLY INSTALLED (whole & verified — these can be moved)",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextSecondaryDark,
+                                    letterSpacing = 1.1.sp,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                                state.recentFiles.forEach { fileName ->
+                                    RecentFileRow(fileName = fileName)
+                                }
                             }
                         }
                     }
@@ -851,8 +836,11 @@ private fun LicenseReportCard(report: LicenseReport) {
                     letterSpacing = 1.5.sp
                 )
                 Text(
-                    text = if (report.baseLicensed) "All downloads are licensed to your account"
-                    else "Base app is not licensed",
+                    text = when {
+                        report.baseLicensed -> "All downloads are licensed to your account"
+                        report.baseUnverified -> "Web check unavailable — Steam servers enforce ownership"
+                        else -> "Base app is not licensed"
+                    },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimaryLight
@@ -863,11 +851,13 @@ private fun LicenseReportCard(report: LicenseReport) {
         Spacer(modifier = Modifier.height(12.dp))
 
         LicenseRow(
-            ok = report.baseLicensed,
+            ok = report.baseLicensed || report.baseUnverified,
             title = report.appName,
-            tag = if (report.baseLicensed) {
-                if (report.isFreeToPlay) "FREE LICENSE" else "OWNED"
-            } else "PURCHASE REQUIRED"
+            tag = when {
+                report.baseLicensed -> if (report.isFreeToPlay) "FREE LICENSE" else "OWNED"
+                report.baseUnverified -> "CM-ENFORCED"
+                else -> "PURCHASE REQUIRED"
+            }
         )
 
         report.licensedDlc.forEach { dlc ->
@@ -928,7 +918,7 @@ private fun LicenseRow(ok: Boolean, title: String, tag: String) {
 }
 
 @Composable
-private fun DepotFileRow(file: DepotFileProgress) {
+private fun DepotProgressRow(depot: DepotProgress) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -940,7 +930,8 @@ private fun DepotFileRow(file: DepotFileProgress) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = file.relPath,
+                text = (if (depot.dlcAppId != null) "DLC ${depot.dlcAppId} • " else "") +
+                    "${depot.name} (${depot.depotId})",
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
                 color = Color.White,
@@ -949,29 +940,29 @@ private fun DepotFileRow(file: DepotFileProgress) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = when (file.status) {
-                    DepotFileStatus.COMPLETE -> "INSTALLED"
-                    DepotFileStatus.DOWNLOADING -> "${file.chunksDone}/${file.chunkCount} chunks"
-                    DepotFileStatus.PENDING -> "QUEUED"
+                text = when {
+                    depot.completed -> "DONE"
+                    depot.fraction > 0f -> "DOWNLOADING"
+                    else -> "QUEUED"
                 },
                 fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                color = when (file.status) {
-                    DepotFileStatus.COMPLETE -> ActiveGreen
-                    DepotFileStatus.DOWNLOADING -> Color(0xFF38BDF8)
-                    DepotFileStatus.PENDING -> Color(0x66FFFFFF)
+                color = when {
+                    depot.completed -> ActiveGreen
+                    depot.fraction > 0f -> Color(0xFF38BDF8)
+                    else -> Color(0x66FFFFFF)
                 }
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         LinearProgressIndicator(
-            progress = { file.progressFraction },
+            progress = { depot.fraction },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(4.dp)
                 .clip(RoundedCornerShape(2.dp)),
-            color = if (file.status == DepotFileStatus.COMPLETE) ActiveGreen else Color.White,
+            color = if (depot.completed) ActiveGreen else Color.White,
             trackColor = Color(0x22FFFFFF)
         )
         Row(
@@ -979,12 +970,13 @@ private fun DepotFileRow(file: DepotFileProgress) {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = FormatUtils.formatBytes(file.downloadedBytes) + " / " + FormatUtils.formatBytes(file.totalBytes),
+                text = FormatUtils.formatBytes(depot.downloadedCompressedBytes) + " / " +
+                    FormatUtils.formatBytes(depot.totalCompressedBytes),
                 fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
                 color = Color(0x80FFFFFF)
             )
-            val pct = (file.progressFraction * 100).toInt()
+            val pct = (depot.fraction * 100).toInt()
             Text(
                 text = "$pct%",
                 fontSize = 9.sp,
@@ -992,6 +984,31 @@ private fun DepotFileRow(file: DepotFileProgress) {
                 color = Color(0x80FFFFFF)
             )
         }
+    }
+}
+
+@Composable
+private fun RecentFileRow(fileName: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.CheckCircle,
+            contentDescription = null,
+            tint = ActiveGreen,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = fileName,
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xB3FFFFFF),
+            maxLines = 1
+        )
     }
 }
 

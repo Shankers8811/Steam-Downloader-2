@@ -52,6 +52,24 @@ android {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
+  packaging {
+    resources {
+      // JavaSteam + protobuf + ktor ship signature/dup metadata files that break
+      // APK merging if not excluded.
+      excludes += setOf(
+        "META-INF/*.SF",
+        "META-INF/*.RSA",
+        "META-INF/*.DSA",
+        "META-INF/*.proto",
+        "META-INF/INDEX.LIST",
+        "META-INF/DEPENDENCIES",
+        "META-INF/LICENSE*",
+        "META-INF/NOTICE*",
+        "META-INF/license/**",
+        "META-INF/versions/**/OSGI-INF/**"
+      )
+    }
+  }
   buildFeatures {
     compose = true
     buildConfig = true
@@ -112,6 +130,12 @@ dependencies {
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
   implementation(libs.firebase.appcheck.recaptcha)
+  // Native Steam (JavaSteam — see docs/GAMENATIVE_NOTES.md)
+  implementation(libs.`in`.dragonbra.javasteam)
+  implementation(libs.`in`.dragonbra.javasteam.depotdownloader)
+  implementation(libs.com.github.luben.zstd.jni) { artifact { type = "aar" } }
+  implementation(libs.org.tukaani.xz)
+  implementation(libs.kotlinx.coroutines.jdk8)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

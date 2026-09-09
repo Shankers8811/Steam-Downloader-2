@@ -97,6 +97,9 @@ data class LicenseReport(
     val appName: String,
     val storeType: String,
     val baseLicensed: Boolean,
+    /** True when Steam's web API could not answer — ownership is then enforced
+     *  by the CM download protocol instead (never silently "unlicensed"). */
+    val baseUnverified: Boolean,
     val isFreeToPlay: Boolean,
     val licensedDlc: List<DlcInfo>,
     val blockedDlc: List<DlcInfo>

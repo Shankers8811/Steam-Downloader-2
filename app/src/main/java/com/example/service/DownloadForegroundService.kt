@@ -109,12 +109,14 @@ class DownloadForegroundService : Service() {
         }
 
         val text = when (state.phase) {
-            SessionPhase.DOWNLOADING ->
+            SessionPhase.DOWNLOADING -> {
+                val totalCompressed = state.depots.sumOf { it.totalCompressedBytes }
                 "${DepotDownloadManager.formatBytes(state.downloadedBytes)} / " +
-                    "${DepotDownloadManager.formatBytes(state.totalBytes)}  •  " +
+                    "${DepotDownloadManager.formatBytes(totalCompressed)}  •  " +
                     "${DepotDownloadManager.formatBytes(state.networkBytesPerSec.toLong())}/s" +
                     if (state.etaSeconds >= 0) "  •  ETA ${formatEtaShort(state.etaSeconds)}" else ""
-            SessionPhase.PAUSED -> "Paused at chunk boundary — files safe to move"
+            }
+            SessionPhase.PAUSED -> "Paused — verified chunks retained; resume any time"
             SessionPhase.COMPLETED -> DepotDownloadManager.formatBytes(state.totalBytes) + " installed"
             else -> state.statusMessage
         }

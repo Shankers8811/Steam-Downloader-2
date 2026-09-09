@@ -49,6 +49,7 @@ class LicenseValidator(
 
         // ---------------- Base game license ----------------
         var baseLicensed = isFree
+        var baseUnverified = false
         if (isFree) {
             log(LogLine(LogLevel.OK, "Free-to-play title — license granted automatically."))
         } else {
@@ -64,7 +65,8 @@ class LicenseValidator(
                 }
                 null -> {
                     baseLicensed = false
-                    log(LogLine(LogLevel.ERROR, "Could not verify the license with Steam (network error). Aborting for safety."))
+                    baseUnverified = true
+                    log(LogLine(LogLevel.WARN, "Web license check unavailable — Steam's download servers will enforce ownership directly."))
                 }
             }
         }
@@ -103,8 +105,11 @@ class LicenseValidator(
                         log(LogLine(LogLevel.WARN, "Could not verify DLC \"$dlcName\" — excluded for safety."))
                     }
                 }
-                // Be gentle with Steam's license endpoint.
-                if (trimmed.size > 8) delay(90)
+                // Be gentle with Steam's license endpoint — spread calls even
+                // for short DLC lists (audit fix: rapid bursts were seen to
+                // trip rate limiting on some accounts).
+                if (trimmed.size > 4) delay(90L)
+                else if (trimmed.size > 1) delay(30L)
             }
         } else if (dlcMode != DlcMode.BASE_ONLY && (info == null || info.dlcIds.isEmpty())) {
             log(LogLine(LogLevel.INFO, "No downloadable content attached to this app."))
@@ -115,6 +120,7 @@ class LicenseValidator(
             appName = resolvedName,
             storeType = info?.type ?: "unknown",
             baseLicensed = baseLicensed,
+            baseUnverified = baseUnverified,
             isFreeToPlay = isFree,
             licensedDlc = licensedDlc,
             blockedDlc = blockedDlc

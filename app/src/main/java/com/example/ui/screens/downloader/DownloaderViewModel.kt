@@ -2,7 +2,6 @@ package com.example.ui.screens.downloader
 
 import android.app.Application
 import android.content.Intent
-import android.net.Uri
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -32,7 +31,11 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     val sessionState: StateFlow<DownloadSessionState> = manager.state
 
     val accountName: StateFlow<String> = services.prefs.steamUsername
-    val targetDisplayPath: StateFlow<String> = services.prefs.targetDisplayPath
+
+    /** The real, on-disk install root (works as a real path for the native
+     *  downloader AND shows up over USB MTP — SAF tree-URIs don't). */
+    val installRootDisplay: StateFlow<String> =
+        MutableStateFlow(manager.installRootDisplay).asStateFlow()
 
     // ---------------- Download configuration inputs ----------------
 
@@ -91,7 +94,7 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
             appId = state.appId,
             appName = state.appName,
             branch = state.branch,
-            targetUriString = services.prefs.targetUri.value,
+            targetUriString = "",
             targetPathDisplay = state.outputDisplay,
             status = status,
             progressPercent = state.progressPercent,
@@ -122,11 +125,12 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
         _includeDlc.value = mode != DlcMode.BASE_ONLY
     }
 
-    fun setTargetDirectory(uri: Uri, displayPath: String) {
-        services.prefs.saveTargetDirectory(uri.toString(), displayPath)
-        manager.setDestination(uri.toString(), displayPath)
-        _statusNotification.value = "Storage location updated: $displayPath"
-    }
+    /** The install location is fixed (real filesystem path, USB-visible). */
+    fun describeInstallLocation(): String =
+        "Installs to a real folder so the native Steam engine can write directly: " +
+            manager.installRootDisplay + " — visible to your PC over USB (Android/data). " +
+            "SAF tree picking was removed: document-provider URIs are not real paths " +
+            "and silently break native file writers."
 
     fun prefillFromLibrary(appId: Int, gameName: String) {
         _appIdInput.value = appId.toString()
