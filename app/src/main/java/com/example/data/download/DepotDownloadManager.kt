@@ -278,14 +278,17 @@ class DepotDownloadManager(
             val statLoop = startStatisticsLoop(totalCompressed)
 
             val downloader = DepotDownloader(
-                /* steamClient = */ runtime.client,
-                /* licenses = */ runtime.licenses.value,
-                /* debug = */ false,
-                /* useLanCache = */ false,
-                /* maxDownloads = */ 8,
-                /* maxFileWrites = */ 1,
-                /* androidEmulation = */ true, // fetch Windows depots (a phone mimics a PC install)
-                /* parentJob = */ engineJob
+                steamClient = runtime.client,
+                licenses = runtime.licenses.value,
+                debug = false,
+                useLanCache = false,
+                maxDownloads = 8,
+                maxFileWrites = 1,
+                androidEmulation = true, // fetch Windows depots (a phone mimics a PC install)
+                parentJob = engineJob
+                // NOTE: named args on purpose — the 1.8.0 ctor has an extra
+                // positional slot (maxDecompress) that would silently shift any
+                // positional call.
             )
 
             val failedErrors = mutableListOf<String>()

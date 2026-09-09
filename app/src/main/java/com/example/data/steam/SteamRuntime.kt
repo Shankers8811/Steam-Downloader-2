@@ -269,7 +269,9 @@ class SteamRuntime(private val context: Context) {
         delayUntilConnected(12_000L)
         if (!_connected.value) return@withLock EResult.TryAnotherCM
 
-        val user = client.getHandler(SteamUser::class.java)
+        val user = requireNotNull(client.getHandler(SteamUser::class.java)) {
+            "SteamUser handler unavailable — SteamClient not initialized"
+        }
 
         // Re-login hygiene (SteamKit pattern): if a previous CM login is still
         // active, log off first so the callback can't fire against our old
@@ -311,7 +313,9 @@ class SteamRuntime(private val context: Context) {
     suspend fun fetchDepotPlan(appId: Int, branch: String, language: String?): List<DepotPlanEntry>? =
         withContext(Dispatchers.IO) {
             try {
-                val apps = client.getHandler(SteamApps::class.java)
+                val apps = requireNotNull(client.getHandler(SteamApps::class.java)) {
+                    "SteamApps handler unavailable — SteamClient not initialized"
+                }
                 val callback = apps.picsGetProductInfo(
                     apps = listOf(PICSRequest(id = appId)),
                     packages = emptyList()
@@ -329,7 +333,9 @@ class SteamRuntime(private val context: Context) {
     /** App's display name straight from PICS appinfo. */
     suspend fun fetchAppName(appId: Int): String? = withContext(Dispatchers.IO) {
         try {
-            val apps = client.getHandler(SteamApps::class.java)
+            val apps = requireNotNull(client.getHandler(SteamApps::class.java)) {
+                "SteamApps handler unavailable — SteamClient not initialized"
+            }
             val callback = apps.picsGetProductInfo(
                 apps = listOf(PICSRequest(id = appId)),
                 packages = emptyList()

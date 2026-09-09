@@ -3,6 +3,18 @@
 Goal: understand how that app runs Steam *natively* on Android and apply the
 same architecture to this downloader.
 
+## Sidenote: what Valve's own GitHub offers (checked, per request)
+
+`github.com/ValveSoftware` publishes only PC/tooling projects — Proton,
+Wine, DXVK, gamescope, GameNetworkingSockets (multiplayer transport for game
+devs), Source SDK, SteamOS tracker, steam-runtime (Linux container env).
+**Valve does not publish the CM protocol, depot download logic, or any
+Android library** — that is exactly why every "native Steam on Android"
+app (GameNative, Pluvia, DepotLab… — and now this one) builds on the
+community-maintained, field-proven JavaSteam stack, whose semantics mirror
+the official desktop client (SteamKit2 lineage). Compatibility here is
+verified version-exact against the released `javasteam:1.8.0` source tag.
+
 ## How it works
 
 1. **No .NET binary, no Wine for downloading.** GameNative talks to Steam
