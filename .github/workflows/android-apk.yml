@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       issues: write
       pull-requests: write
     steps:
@@ -72,3 +72,30 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish APK to apk-builds branch (direct-download channel)
+        if: success() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DIST=$(mktemp -d)
+          cp app/build/outputs/apk/debug/app-debug.apk "$DIST/DepotDownloader-debug.apk"
+          {
+            echo "# DepotDownloader — debug APK"
+            echo
+            echo "Auto-built by the Android APK (debug) workflow."
+            echo "Workflow run: ${{ github.run_id }}"
+            echo "Commit: ${{ github.sha }}"
+            echo
+            echo "SHA256:"
+            sha256sum "$DIST/DepotDownloader-debug.apk"
+          } > "$DIST/README.md"
+          cd "$DIST"
+          git init -q
+          git config user.name "arena-ci[bot]"
+          git config user.email "arena-ci[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git checkout -q -b apk-builds
+          git add DepotDownloader-debug.apk README.md
+          git commit -q -m "DepotDownloader debug APK — run ${{ github.run_id }}" || true
+          git push --force origin apk-builds
