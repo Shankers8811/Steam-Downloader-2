@@ -21,6 +21,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Also provision JDK 21 (some AGP/KSP internals call newer APIs)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -36,9 +41,27 @@ jobs:
           gradle-version: "9.1.0"
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: |
+          set +e
+          gradle --no-daemon :app:assembleDebug 2>&1 | tee build.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Report failure details to the PR (log tail, if any)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "❌ CI build failed on \`${{ github.ref_name }}\` (commit ${{ github.sha }})."
+            echo
+            echo '```text'
+            tail -n 150 build.log
+            echo '```'
+          } > failure-report.md
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file failure-report.md || true
 
       - name: Upload debug APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: depotdownloader-debug-apk
