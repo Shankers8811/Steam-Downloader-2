@@ -623,7 +623,7 @@ class DepotDownloadManager(
     // Counters fed by engine events
     // ------------------------------------------------------------------
 
-    private inner class DownloadCounters {
+    private class DownloadCounters {
         private val lock = Any()
 
         @Volatile

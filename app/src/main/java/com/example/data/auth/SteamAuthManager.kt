@@ -20,8 +20,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -400,7 +401,7 @@ class SteamAuthManager(
     private suspend fun waitConnected(timeoutMs: Long): Boolean {
         if (runtime.connected.value) return true
         val deadline = System.currentTimeMillis() + timeoutMs
-        while (isActive && System.currentTimeMillis() < deadline) {
+        while (coroutineContext.isActive && System.currentTimeMillis() < deadline) {
             if (runtime.connected.value) return true
             delay(150L)
         }

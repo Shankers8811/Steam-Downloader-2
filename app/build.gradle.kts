@@ -28,12 +28,9 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
+    // NOTE: no custom debugConfig — AGP auto-signs debug builds with its own
+    // debug keystore, so anyone can build the APK (CI included) without
+    // repo-local keystore files.
   }
 
   buildTypes {
@@ -43,7 +40,7 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug { /* implicit debug signing */ }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -120,6 +117,11 @@ dependencies {
   // Native Steam (JavaSteam — see docs/GAMENATIVE_NOTES.md)
   implementation(libs.`in`.dragonbra.javasteam)
   implementation(libs.`in`.dragonbra.javasteam.depotdownloader)
+  // javasteam ships protobuf only on its RUNTIME classpath; our code refers
+  // to a protobuf-generated enum type (EAuthSessionGuardType), whose supertype
+  // (ProtocolMessageEnum) must also exist at COMPILE time. Version pinned to
+  // javasteam 1.8.0's own dependency.
+  implementation("com.google.protobuf:protobuf-java:4.31.1")
   implementation(libs.com.github.luben.zstd.jni) { artifact { type = "aar" } }
   implementation(libs.org.tukaani.xz)
   implementation(libs.kotlinx.coroutines.jdk8)
