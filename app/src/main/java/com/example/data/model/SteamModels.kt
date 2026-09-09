@@ -27,7 +27,7 @@ data class SteamGameDto(
     }
 
     fun getIconImageUrl(): String {
-        return if (!imgIconUrl.isNull_or_empty()) {
+        return if (!imgIconUrl.isNullOrBlank()) {
             "https://media.steampowered.com/steamcommunity/public/images/apps/$appid/$imgIconUrl.jpg"
         } else {
             getHeaderImageUrl()
@@ -35,7 +35,23 @@ data class SteamGameDto(
     }
 }
 
-private fun String?.isNull_or_empty(): Boolean = this == null || this.trim().isEmpty()
+/** IUserService/CheckAppOwnership — per-app license lookup for the signed-in account. */
+@JsonClass(generateAdapter = true)
+data class CheckAppOwnershipResponse(
+    @Json(name = "response") val response: AppOwnershipWrap?
+)
+
+@JsonClass(generateAdapter = true)
+data class AppOwnershipWrap(
+    @Json(name = "appownership") val appOwnership: AppOwnership?
+)
+
+@JsonClass(generateAdapter = true)
+data class AppOwnership(
+    @Json(name = "ownsapp") val ownsApp: Boolean? = null,
+    @Json(name = "permanent") val permanent: Boolean? = null,
+    @Json(name = "ownersteamid") val ownerSteamId: String? = null
+)
 
 enum class DlcMode {
     BASE_ONLY,
@@ -51,3 +67,37 @@ enum class DownloadStatus {
     FAILED,
     CANCELLED
 }
+
+// ------------------------------------------------------------------
+// Engine / log / license domain models
+// ------------------------------------------------------------------
+
+enum class LogLevel { INFO, OK, WARN, ERROR }
+
+data class LogLine(
+    val level: LogLevel,
+    val text: String,
+    val timestampMs: Long = System.currentTimeMillis()
+)
+
+/** A single piece of downloadable content attached to a base app. */
+data class DlcInfo(
+    val appId: Int,
+    val name: String
+)
+
+/**
+ * Result of license validation for one app, performed exactly like the Steam
+ * client does before it starts downloading: the base app license is verified
+ * first, and every DLC the account does NOT own is excluded and flagged as
+ * requiring a separate purchase.
+ */
+data class LicenseReport(
+    val appId: Int,
+    val appName: String,
+    val storeType: String,
+    val baseLicensed: Boolean,
+    val isFreeToPlay: Boolean,
+    val licensedDlc: List<DlcInfo>,
+    val blockedDlc: List<DlcInfo>
+)

@@ -6,7 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,30 +22,29 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoveUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SdCard
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,46 +59,51 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.download.DepotFileProgress
+import com.example.data.download.DepotFileStatus
+import com.example.data.download.SessionPhase
 import com.example.data.model.DlcMode
+import com.example.data.model.LicenseReport
+import com.example.data.model.LogLevel
 import com.example.ui.components.EditorialGlassCard
 import com.example.ui.components.WhiteCard
 import com.example.ui.components.WhiteTextField
 import com.example.ui.theme.ActiveGreen
 import com.example.ui.theme.EditorialBackground
-import com.example.ui.theme.EditorialGlassBorder
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.TextPrimaryLight
+import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.theme.TextSecondaryLight
 import com.example.ui.theme.WarningOrange
+import com.example.ui.util.FormatUtils
 
+/**
+ * Steam-style download manager: license check first, then live download
+ * statistics (internet speed, disk write speed, ETA), chunk-boundary pausing
+ * and a file-by-file view of what is staged vs installed.
+ */
 @Composable
 fun DownloaderScreen(
     viewModel: DownloaderViewModel
 ) {
     val context = LocalContext.current
 
-    val usernameInput by viewModel.usernameInput.collectAsStateWithLifecycle()
-    val passwordInput by viewModel.passwordInput.collectAsStateWithLifecycle()
-    val twoFactorInput by viewModel.twoFactorInput.collectAsStateWithLifecycle()
+    val state by viewModel.sessionState.collectAsStateWithLifecycle()
+    val accountName by viewModel.accountName.collectAsStateWithLifecycle()
+    val targetDisplayPath by viewModel.targetDisplayPath.collectAsStateWithLifecycle()
+    val statusNotification by viewModel.statusNotification.collectAsStateWithLifecycle()
 
     val appIdInput by viewModel.appIdInput.collectAsStateWithLifecycle()
     val appNameInput by viewModel.appNameInput.collectAsStateWithLifecycle()
     val depotIdsInput by viewModel.depotIdsInput.collectAsStateWithLifecycle()
-    val manifestIdInput by viewModel.manifestIdInput.collectAsStateWithLifecycle()
     val branchInput by viewModel.branchInput.collectAsStateWithLifecycle()
-
     val includeDlc by viewModel.includeDlc.collectAsStateWithLifecycle()
-    val dlcDepotId by viewModel.dlcDepotId.collectAsStateWithLifecycle()
     val dlcMode by viewModel.dlcMode.collectAsStateWithLifecycle()
 
-    val targetDisplayPath by viewModel.targetDisplayPath.collectAsStateWithLifecycle()
-    val bridgeState by viewModel.bridgeState.collectAsStateWithLifecycle()
-    val statusNotification by viewModel.statusNotification.collectAsStateWithLifecycle()
-
+    var isFilesExpanded by remember { mutableStateOf(false) }
     var isConsoleExpanded by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -111,23 +114,28 @@ fun DownloaderScreen(
         }
     }
 
-    // SAF Storage Directory Launcher
     val dirPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                val takeFlags = (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
-
-                val folderName = uri.lastPathSegment?.substringAfterLast(":") ?: "Selected Directory"
-                val display = if (uri.toString().contains("primary")) "Phone Storage / $folderName" else "USB / OTG Drive / $folderName"
-
-                viewModel.setTargetDirectory(uri, display)
-            } catch (e: Exception) {
-                viewModel.setTargetDirectory(uri, uri.path ?: "Selected Storage")
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (_: Exception) {
             }
+            val folderName = uri.lastPathSegment?.substringAfterLast(":") ?: "Selected Directory"
+            val display = if (uri.toString().contains("primary")) "Phone Storage / $folderName" else "USB / OTG Drive / $folderName"
+            viewModel.setTargetDirectory(uri, display)
         }
+    }
+
+    val engineBusy = state.isEngineActive
+    val phaseColor = when (state.phase) {
+        SessionPhase.DOWNLOADING, SessionPhase.COMPLETED -> ActiveGreen
+        SessionPhase.PAUSED -> WarningOrange
+        SessionPhase.FAILED -> ErrorRed
+        SessionPhase.CANCELLED -> Color(0xFF9CA3AF)
+        else -> Color(0xFF38BDF8)
     }
 
     Box(
@@ -142,7 +150,7 @@ fun DownloaderScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Editorial Header Banner
+            // ---------------- Header ----------------
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -150,22 +158,23 @@ fun DownloaderScreen(
             ) {
                 Column {
                     Text(
-                        text = "SYSTEM V2.4",
+                        text = "ACCOUNT ${accountName.uppercase()}",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0x80FFFFFF),
-                        letterSpacing = 2.sp
+                        letterSpacing = 2.sp,
+                        maxLines = 1
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "DEPOT",
+                            text = "DOWN",
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Black,
                             color = Color.White,
                             letterSpacing = (-1).sp
                         )
                         Text(
-                            text = "DR",
+                            text = "LOADS",
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Black,
                             color = Color(0x66FFFFFF),
@@ -174,12 +183,19 @@ fun DownloaderScreen(
                     }
                 }
 
-                Surface(
-                    color = Color.White,
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                Surface(color = phaseColor, shape = RoundedCornerShape(20.dp)) {
                     Text(
-                        text = if (bridgeState.isBinaryAvailable) "CLI READY" else "BRIDGE MODE",
+                        text = when (state.phase) {
+                            SessionPhase.IDLE -> "READY"
+                            SessionPhase.VALIDATING_LICENSE -> "CHECKING LICENSE"
+                            SessionPhase.ALLOCATING -> "ALLOCATING"
+                            SessionPhase.DOWNLOADING -> "DOWNLOADING"
+                            SessionPhase.PAUSED -> "PAUSED"
+                            SessionPhase.VERIFYING -> "VERIFYING"
+                            SessionPhase.COMPLETED -> "COMPLETE"
+                            SessionPhase.FAILED -> "FAILED"
+                            SessionPhase.CANCELLED -> "CANCELLED"
+                        },
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.Black,
@@ -188,7 +204,7 @@ fun DownloaderScreen(
                 }
             }
 
-            // EDITORIAL MAIN DOWNLOAD HERO CARD (Pure White 28dp card as spec)
+            // ---------------- HERO CARD: progress + speeds + ETA ----------------
             WhiteCard(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -205,25 +221,32 @@ fun DownloaderScreen(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = if (appNameInput.isNotBlank()) appNameInput else "App ID ${if (appIdInput.isNotBlank()) appIdInput else "---"}",
+                            text = state.appName.ifBlank {
+                                appNameInput.ifBlank { "Pick a game from your library" }
+                            },
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimaryLight,
                             maxLines = 1
                         )
                         Text(
-                            text = "App ID: ${if (appIdInput.isNotBlank()) appIdInput else "---"} • ${if (branchInput.isNotBlank()) branchInput else "public"} Branch",
+                            text = buildString {
+                                append("App ${if (state.appId != 0) state.appId else appIdInput.ifBlank { "---" }}")
+                                append(" • ${state.branch} branch")
+                                if (state.outputDisplay.isNotBlank()) append("\n→ ${state.outputDisplay}")
+                            },
                             fontSize = 12.sp,
-                            color = TextSecondaryLight
+                            color = TextSecondaryLight,
+                            lineHeight = 16.sp
                         )
                     }
 
                     Surface(
-                        color = Color.Black,
+                        color = if (state.safeToMove) ActiveGreen else Color.Black,
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Text(
-                            text = if (bridgeState.isRunning) "LIVE" else "RESUMABLE",
+                            text = if (state.safeToMove) "SAFE TO MOVE" else "STAGED",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
@@ -232,31 +255,24 @@ fun DownloaderScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Bottom
                 ) {
-                    Column {
-                        Text(
-                            text = bridgeState.totalSizeFormatted,
-                            fontSize = 32.sp,
-                            fontWeight = FontWeight.Black,
-                            color = TextPrimaryLight,
-                            letterSpacing = (-1).sp
-                        )
-                        Text(
-                            text = "Speed: ${bridgeState.downloadSpeed}",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextSecondaryLight
-                        )
-                    }
-
                     Text(
-                        text = "${bridgeState.progressPercent.toInt()}%",
+                        text = if (state.totalBytes > 0)
+                            "${FormatUtils.formatBytes(state.downloadedBytes)} / ${FormatUtils.formatBytes(state.totalBytes)}"
+                        else "-- / --",
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Black,
+                        color = TextPrimaryLight,
+                        letterSpacing = (-1).sp
+                    )
+                    Text(
+                        text = "${state.progressPercent.toInt()}%",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimaryLight
@@ -266,7 +282,7 @@ fun DownloaderScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 LinearProgressIndicator(
-                    progress = { bridgeState.progressPercent / 100f },
+                    progress = { state.progressPercent / 100f },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(12.dp)
@@ -274,97 +290,233 @@ fun DownloaderScreen(
                     color = Color.Black,
                     trackColor = Color(0xFFE4E4E7)
                 )
-            }
 
-            // ACTION BUTTONS ROW (Editorial Cancel / Pause / Resume / Start)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (bridgeState.isRunning) {
-                    Button(
-                        onClick = { viewModel.pauseDownload() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp)
-                            .testTag("pause_download_button")
-                    ) {
-                        Icon(imageVector = Icons.Filled.Pause, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("PAUSE", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    }
+                Spacer(modifier = Modifier.height(16.dp))
 
-                    Button(
-                        onClick = { viewModel.cancelDownload() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF), contentColor = Color.White),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp)
-                            .testTag("cancel_download_button")
-                    ) {
-                        Icon(imageVector = Icons.Filled.Cancel, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("CANCEL", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    }
-                } else if (bridgeState.isPaused) {
-                    Button(
-                        onClick = { viewModel.resumeDownload() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp)
-                            .testTag("resume_download_button")
-                    ) {
-                        Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("RESUME", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    }
+                // Steam-style tri-stat: down rate / disk write / time remaining
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    DownloadStat(
+                        label = "DOWN RATE",
+                        value = if (engineBusy) FormatUtils.formatSpeed(state.networkBytesPerSec) else "—",
+                        caption = if (state.networkPeakBytesPerSec > 0)
+                            "peak ${FormatUtils.formatSpeed(state.networkPeakBytesPerSec)}" else "internet speed",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DownloadStat(
+                        label = "DISK WRITE",
+                        value = if (engineBusy) FormatUtils.formatSpeed(state.diskBytesPerSec) else "—",
+                        caption = "storage write speed",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DownloadStat(
+                        label = "TIME REMAINING",
+                        value = if (engineBusy && state.etaSeconds >= 0) FormatUtils.formatEta(state.etaSeconds)
+                        else if (state.phase == SessionPhase.COMPLETED) "Done" else "—",
+                        caption = if (engineBusy && state.etaSeconds > 0)
+                            "≈ ${FormatUtils.formatDurationWords(state.etaSeconds)} left" else "estimated",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
 
-                    Button(
-                        onClick = { viewModel.cancelDownload() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF), contentColor = Color.White),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp)
-                            .testTag("cancel_download_button")
+                if (state.currentFile.isNotBlank() && state.phase == SessionPhase.DOWNLOADING) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = Color(0xFFF4F4F5),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(imageVector = Icons.Filled.Cancel, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("CANCEL", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text(
+                                text = "WRITING  ${state.currentFile}",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimaryLight,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "chunk ${state.currentFileChunkIndex} of ${state.currentFileChunkCount} " +
+                                    "(${FormatUtils.formatBytes(state.currentFileChunkIndex.toLong() * 1024 * 1024)} committed at chunk boundaries)",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = TextSecondaryLight,
+                                maxLines = 1
+                            )
+                        }
                     }
-                } else {
-                    Button(
-                        onClick = { viewModel.startDownloadTask() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .testTag("start_download_button")
+                }
+
+                if (state.phase == SessionPhase.PAUSED) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = ActiveGreen.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(imageVector = Icons.Filled.Download, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("START GAME DOWNLOAD", fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.MoveUp,
+                                contentDescription = null,
+                                tint = ActiveGreen,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Paused at a chunk boundary — no half-written files. Completed files are in your storage, ready to move to your PC; resume any time to continue from this exact point.",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimaryLight,
+                                lineHeight = 15.sp
+                            )
+                        }
+                    }
+                }
+
+                if (state.errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = ErrorRed.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = state.errorMessage.orEmpty(),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ErrorRed,
+                            modifier = Modifier.padding(12.dp)
+                        )
                     }
                 }
             }
 
-            // SAF STORAGE DESTINATION CARD
+            // ---------------- Control buttons ----------------
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                when {
+                    engineBusy -> {
+                        Button(
+                            onClick = { viewModel.pauseDownload() },
+                            enabled = state.phase != SessionPhase.VERIFYING,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .testTag("pause_download_button")
+                        ) {
+                            Icon(imageVector = Icons.Filled.Pause, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("PAUSE", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        }
+                        Button(
+                            onClick = { viewModel.cancelDownload() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF), contentColor = Color.White),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .testTag("cancel_download_button")
+                        ) {
+                            Icon(imageVector = Icons.Filled.Cancel, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("CANCEL", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        }
+                    }
+
+                    state.phase == SessionPhase.PAUSED -> {
+                        Button(
+                            onClick = { viewModel.resumeDownload() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .testTag("resume_download_button")
+                        ) {
+                            Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("RESUME", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        }
+                        Button(
+                            onClick = { viewModel.cancelDownload() },
+                            enabled = false,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0x22FFFFFF),
+                                contentColor = Color(0x66FFFFFF)
+                            ),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                        ) {
+                            Icon(imageVector = Icons.Filled.Cancel, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("CANCEL", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        }
+                    }
+
+                    else -> {
+                        Button(
+                            onClick = { viewModel.startDownloadTask() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .testTag("start_download_button")
+                        ) {
+                            Icon(imageVector = Icons.Filled.Download, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "VALIDATE LICENSE & DOWNLOAD",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.5.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Clear partials (shown when staged data survives a pause/cancel)
+            if (state.phase == SessionPhase.PAUSED || state.phase == SessionPhase.CANCELLED ||
+                (state.phase == SessionPhase.FAILED && state.hasResumableSession)
+            ) {
+                TextButton(
+                    onClick = { viewModel.clearPartialData() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("clear_partials_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.DeleteSweep,
+                        contentDescription = null,
+                        tint = TextSecondaryDark,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "Clear staged partial data (${FormatUtils.formatBytes(state.downloadedBytes)})",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextSecondaryDark
+                    )
+                }
+            }
+
+            // ---------------- Storage destination ----------------
             EditorialGlassCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "STORAGE DESTINATION",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0x80FFFFFF),
+                    color = TextSecondaryDark,
                     letterSpacing = 1.5.sp
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -378,7 +530,12 @@ fun DownloaderScreen(
                                 .background(Color(0x33FFFFFF)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(imageVector = Icons.Filled.SdCard, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Icon(
+                                imageVector = Icons.Filled.SdCard,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
@@ -390,13 +547,13 @@ fun DownloaderScreen(
                                 maxLines = 1
                             )
                             Text(
-                                text = "SAF External Directory",
+                                text = "Partial downloads are isolated in steam_staging — only complete files land here",
                                 fontSize = 10.sp,
-                                color = Color(0x80FFFFFF)
+                                color = TextSecondaryDark,
+                                maxLines = 1
                             )
                         }
                     }
-
                     Button(
                         onClick = { dirPickerLauncher.launch(null) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
@@ -408,16 +565,20 @@ fun DownloaderScreen(
                 }
             }
 
-            // GAME & DEPOT CONFIGURATION WHITE CARD
+            // ---------------- License report ----------------
+            state.licenseReport?.let { report ->
+                LicenseReportCard(report = report)
+            }
+
+            // ---------------- Target configuration ----------------
             WhiteCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "TARGET & DEPOT CONFIGURATION",
+                    text = "TARGET & BRANCH",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextSecondaryLight,
                     letterSpacing = 1.5.sp
                 )
-
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -428,11 +589,10 @@ fun DownloaderScreen(
                         placeholder = "e.g. 220",
                         modifier = Modifier.weight(1f)
                     )
-
                     WhiteTextField(
                         value = appNameInput,
                         onValueChange = { viewModel.onAppNameChanged(it) },
-                        label = "Game Title",
+                        label = "Game title",
                         placeholder = "Half-Life 2",
                         modifier = Modifier.weight(1.2f)
                     )
@@ -440,24 +600,14 @@ fun DownloaderScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                WhiteTextField(
-                    value = depotIdsInput,
-                    onValueChange = { viewModel.onDepotIdsChanged(it) },
-                    label = "Depot IDs (Optional)",
-                    placeholder = "e.g. 220, 221 (Leave blank for all)"
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     WhiteTextField(
-                        value = manifestIdInput,
-                        onValueChange = { viewModel.onManifestIdChanged(it) },
-                        label = "Manifest ID",
-                        placeholder = "8374920194831",
+                        value = depotIdsInput,
+                        onValueChange = { viewModel.onDepotIdsChanged(it) },
+                        label = "Depot IDs (optional)",
+                        placeholder = "Leave blank for all",
                         modifier = Modifier.weight(1f)
                     )
-
                     WhiteTextField(
                         value = branchInput,
                         onValueChange = { viewModel.onBranchChanged(it) },
@@ -468,7 +618,7 @@ fun DownloaderScreen(
                 }
             }
 
-            // DLC INCLUSION WHITE CARD
+            // ---------------- DLC configuration ----------------
             WhiteCard(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -476,17 +626,23 @@ fun DownloaderScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text(text = "DLC CONFIGURATION", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextSecondaryLight, letterSpacing = 1.5.sp)
-                        Text(text = "Include DLC depots in download", fontSize = 12.sp, color = TextPrimaryLight, fontWeight = FontWeight.Bold)
-                    }
-
-                    Switch(
-                        checked = includeDlc,
-                        onCheckedChange = { viewModel.onIncludeDlcChanged(it) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color.Black
+                        Text(
+                            text = "DLC CONTENT",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextSecondaryLight,
+                            letterSpacing = 1.5.sp
                         )
+                        Text(
+                            text = "Only DLC your account actually owns will be downloaded",
+                            fontSize = 12.sp,
+                            color = TextPrimaryLight,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = includeDlc,
+                        onCheckedChange = { viewModel.onIncludeDlcChanged(it) }
                     )
                 }
 
@@ -494,75 +650,67 @@ fun DownloaderScreen(
                     Column(modifier = Modifier.padding(top = 12.dp)) {
                         DlcModeOption(
                             selected = dlcMode == DlcMode.BASE_ONLY,
-                            title = "Base Game Only",
+                            title = "Base game only",
                             onSelect = { viewModel.onDlcModeChanged(DlcMode.BASE_ONLY) }
                         )
-
                         DlcModeOption(
                             selected = dlcMode == DlcMode.BASE_AND_DLC,
-                            title = "Base Game + Selected DLC",
+                            title = "Base game + every licensed DLC (ownership checked first)",
                             onSelect = { viewModel.onDlcModeChanged(DlcMode.BASE_AND_DLC) }
                         )
-
                         DlcModeOption(
                             selected = dlcMode == DlcMode.DLC_ONLY,
-                            title = "DLC-Only Mode",
+                            title = "Licensed DLC only",
                             onSelect = { viewModel.onDlcModeChanged(DlcMode.DLC_ONLY) }
                         )
+                    }
+                }
+            }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        WhiteTextField(
-                            value = dlcDepotId,
-                            onValueChange = { viewModel.onDlcDepotIdChanged(it) },
-                            label = "DLC Depot ID",
-                            placeholder = "e.g. 228981"
+            // ---------------- Files on disk ----------------
+            if (state.files.isNotEmpty()) {
+                EditorialGlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { isFilesExpanded = !isFilesExpanded },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Folder,
+                                contentDescription = null,
+                                tint = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "FILES  ${state.completeFileCount}/${state.fileCount} INSTALLED",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = Color.White,
+                                letterSpacing = 1.2.sp
+                            )
+                        }
+                        Text(
+                            text = if (isFilesExpanded) "HIDE" else "SHOW",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
                     }
-                }
-            }
 
-            // CREDENTIALS CARD
-            WhiteCard(modifier = Modifier.fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Filled.Lock, contentDescription = null, tint = Color.Black)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(text = "STEAM ACCOUNT CREDENTIALS", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = TextSecondaryLight, letterSpacing = 1.2.sp)
-                        Text(text = "In-memory credentials required for protected depot keys", fontSize = 11.sp, color = TextSecondaryLight)
+                    AnimatedVisibility(visible = isFilesExpanded) {
+                        Column(modifier = Modifier.padding(top = 12.dp)) {
+                            state.files.forEach { file ->
+                                DepotFileRow(file = file)
+                            }
+                        }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                WhiteTextField(
-                    value = usernameInput,
-                    onValueChange = { viewModel.onUsernameChanged(it) },
-                    label = "Steam Username",
-                    placeholder = "gabe_newell"
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                WhiteTextField(
-                    value = passwordInput,
-                    onValueChange = { viewModel.onPasswordChanged(it) },
-                    label = "Steam Password",
-                    placeholder = "••••••••••••",
-                    visualTransformation = PasswordVisualTransformation()
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                WhiteTextField(
-                    value = twoFactorInput,
-                    onValueChange = { viewModel.onTwoFactorChanged(it) },
-                    label = "Steam Guard / 2FA Code",
-                    placeholder = "ABC12"
-                )
             }
 
-            // LOG CONSOLE
+            // ---------------- Engine log ----------------
             EditorialGlassCard(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier
@@ -575,14 +723,13 @@ fun DownloaderScreen(
                         Icon(imageVector = Icons.Filled.Terminal, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "TERMINAL LOG (${bridgeState.logOutput.size} LINES)",
+                            text = "ENGINE LOG (${state.logLines.size})",
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
                             color = Color.White,
                             letterSpacing = 1.2.sp
                         )
                     }
-
                     Text(
                         text = if (isConsoleExpanded) "HIDE" else "SHOW",
                         fontSize = 11.sp,
@@ -598,29 +745,38 @@ fun DownloaderScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 12.dp)
-                            .height(180.dp)
+                            .height(200.dp)
                     ) {
                         val scrollState = rememberScrollState()
+                        LaunchedEffect(state.logLines.size) {
+                            scrollState.animateScrollTo(scrollState.maxValue)
+                        }
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(12.dp)
                                 .verticalScroll(scrollState)
                         ) {
-                            if (bridgeState.logOutput.isEmpty()) {
+                            if (state.logLines.isEmpty()) {
                                 Text(
-                                    text = "Terminal logs will display here upon download initialization...",
+                                    text = "Engine log appears here once a download starts…",
                                     color = Color(0x66FFFFFF),
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace
                                 )
                             } else {
-                                bridgeState.logOutput.forEach { logLine ->
+                                state.logLines.forEach { line ->
                                     Text(
-                                        text = logLine,
-                                        color = if (logLine.contains("SUCCESS")) ActiveGreen else if (logLine.contains("ERROR") || logLine.contains("EXCEPTION")) ErrorRed else Color.White,
+                                        text = line.text,
+                                        color = when (line.level) {
+                                            LogLevel.OK -> ActiveGreen
+                                            LogLevel.WARN -> WarningOrange
+                                            LogLevel.ERROR -> ErrorRed
+                                            LogLevel.INFO -> Color.White
+                                        },
                                         fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace
+                                        fontFamily = FontFamily.Monospace,
+                                        lineHeight = 15.sp
                                     )
                                 }
                             }
@@ -636,6 +792,206 @@ fun DownloaderScreen(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+    }
+}
+
+// ------------------------------------------------------------------
+// Pieces
+// ------------------------------------------------------------------
+
+@Composable
+private fun DownloadStat(
+    label: String,
+    value: String,
+    caption: String,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            color = TextSecondaryLight,
+            letterSpacing = 1.2.sp
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Black,
+            color = TextPrimaryLight,
+            maxLines = 1
+        )
+        Text(
+            text = caption,
+            fontSize = 10.sp,
+            color = TextSecondaryLight,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun LicenseReportCard(report: LicenseReport) {
+    WhiteCard(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.Shield,
+                contentDescription = null,
+                tint = Color.Black,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = "LICENSE CHECK",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextSecondaryLight,
+                    letterSpacing = 1.5.sp
+                )
+                Text(
+                    text = if (report.baseLicensed) "All downloads are licensed to your account"
+                    else "Base app is not licensed",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimaryLight
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        LicenseRow(
+            ok = report.baseLicensed,
+            title = report.appName,
+            tag = if (report.baseLicensed) {
+                if (report.isFreeToPlay) "FREE LICENSE" else "OWNED"
+            } else "PURCHASE REQUIRED"
+        )
+
+        report.licensedDlc.forEach { dlc ->
+            LicenseRow(ok = true, title = dlc.name, tag = "DLC LICENSED")
+        }
+        report.blockedDlc.forEach { dlc ->
+            LicenseRow(ok = false, title = dlc.name, tag = "DLC — BUY SEPARATELY")
+        }
+
+        if (report.blockedDlc.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "${report.blockedDlc.size} DLC item(s) skipped: they are sold separately and are not on this account, so they were excluded before any bytes were downloaded.",
+                fontSize = 11.sp,
+                color = TextSecondaryLight,
+                lineHeight = 15.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun LicenseRow(ok: Boolean, title: String, tag: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (ok) Icons.Filled.CheckCircle else Icons.Filled.Block,
+            contentDescription = null,
+            tint = if (ok) ActiveGreen else WarningOrange,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimaryLight,
+            modifier = Modifier.weight(1f),
+            maxLines = 1
+        )
+        Surface(
+            color = if (ok) ActiveGreen.copy(alpha = 0.15f) else WarningOrange.copy(alpha = 0.18f),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text(
+                text = tag,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (ok) ActiveGreen else WarningOrange,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun DepotFileRow(file: DepotFileProgress) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = file.relPath,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = when (file.status) {
+                    DepotFileStatus.COMPLETE -> "INSTALLED"
+                    DepotFileStatus.DOWNLOADING -> "${file.chunksDone}/${file.chunkCount} chunks"
+                    DepotFileStatus.PENDING -> "QUEUED"
+                },
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = when (file.status) {
+                    DepotFileStatus.COMPLETE -> ActiveGreen
+                    DepotFileStatus.DOWNLOADING -> Color(0xFF38BDF8)
+                    DepotFileStatus.PENDING -> Color(0x66FFFFFF)
+                }
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { file.progressFraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
+            color = if (file.status == DepotFileStatus.COMPLETE) ActiveGreen else Color.White,
+            trackColor = Color(0x22FFFFFF)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = FormatUtils.formatBytes(file.downloadedBytes) + " / " + FormatUtils.formatBytes(file.totalBytes),
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0x80FFFFFF)
+            )
+            val pct = (file.progressFraction * 100).toInt()
+            Text(
+                text = "$pct%",
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0x80FFFFFF)
+            )
+        }
     }
 }
 

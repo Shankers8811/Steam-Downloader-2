@@ -6,32 +6,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * Non-secret user preferences. The remembered login itself (refresh token)
+ * lives in the encrypted [com.example.data.auth.CredentialVault]; here we only
+ * keep the account name so the sign-in form can greet the user by name.
+ */
 class UserPreferencesRepository(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("depot_downloader_prefs", Context.MODE_PRIVATE)
-
-    private val _steamId = MutableStateFlow(prefs.getString(KEY_STEAM_ID, "") ?: "")
-    val steamId: StateFlow<String> = _steamId.asStateFlow()
-
-    private val _apiKey = MutableStateFlow(prefs.getString(KEY_API_KEY, "") ?: "")
-    val apiKey: StateFlow<String> = _apiKey.asStateFlow()
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences("depot_downloader_prefs", Context.MODE_PRIVATE)
 
     private val _targetUri = MutableStateFlow(prefs.getString(KEY_TARGET_URI, "") ?: "")
     val targetUri: StateFlow<String> = _targetUri.asStateFlow()
 
-    private val _targetDisplayPath = MutableStateFlow(prefs.getString(KEY_TARGET_DISPLAY_PATH, "Internal Storage / Downloads") ?: "Internal Storage / Downloads")
+    private val _targetDisplayPath = MutableStateFlow(
+        prefs.getString(KEY_TARGET_DISPLAY_PATH, "App Storage / SteamLibrary")
+            ?: "App Storage / SteamLibrary"
+    )
     val targetDisplayPath: StateFlow<String> = _targetDisplayPath.asStateFlow()
 
+    /** Last successfully signed-in account name (for the login form greeting). */
     private val _steamUsername = MutableStateFlow(prefs.getString(KEY_STEAM_USERNAME, "") ?: "")
     val steamUsername: StateFlow<String> = _steamUsername.asStateFlow()
-
-    fun saveSteamCredentials(steamId: String, apiKey: String) {
-        prefs.edit()
-            .putString(KEY_STEAM_ID, steamId)
-            .putString(KEY_API_KEY, apiKey)
-            .apply()
-        _steamId.value = steamId
-        _apiKey.value = apiKey
-    }
 
     fun saveTargetDirectory(uriString: String, displayPath: String) {
         prefs.edit()
@@ -43,15 +38,11 @@ class UserPreferencesRepository(context: Context) {
     }
 
     fun saveSteamUsername(username: String) {
-        prefs.edit()
-            .putString(KEY_STEAM_USERNAME, username)
-            .apply()
+        prefs.edit().putString(KEY_STEAM_USERNAME, username).apply()
         _steamUsername.value = username
     }
 
     companion object {
-        private const val KEY_STEAM_ID = "steam_id"
-        private const val KEY_API_KEY = "api_key"
         private const val KEY_TARGET_URI = "target_uri"
         private const val KEY_TARGET_DISPLAY_PATH = "target_display_path"
         private const val KEY_STEAM_USERNAME = "steam_username"

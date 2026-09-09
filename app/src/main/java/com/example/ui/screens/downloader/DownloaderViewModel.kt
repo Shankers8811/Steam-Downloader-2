@@ -1,39 +1,42 @@
 package com.example.ui.screens.downloader
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.db.AppDatabase
+import com.example.DepotApplication
 import com.example.data.db.DownloadTaskEntity
+import com.example.data.download.DownloadRequest
+import com.example.data.download.DownloadSessionState
+import com.example.data.download.SessionPhase
 import com.example.data.model.DlcMode
-import com.example.data.repository.UserPreferencesRepository
-import com.example.bridge.BridgeState
-import com.example.bridge.DepotDownloaderBridge
+import com.example.service.DownloadForegroundService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Owns the download configuration form and delegates execution to the
+ * app-scoped [DepotDownloadManager] — the engine survives the UI, so pausing,
+ * leaving the screen or rotating the phone never breaks a download.
+ */
 class DownloaderViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val db = AppDatabase.getDatabase(application)
-    private val prefsRepo = UserPreferencesRepository(application)
-    val bridge = DepotDownloaderBridge(application)
+    private val services = DepotApplication.get(application)
+    private val manager = services.downloadManager
+    private val authManager = services.authManager
 
-    // Credentials (In-memory raw state)
-    val steamUsername: StateFlow<String> = prefsRepo.steamUsername
-    private val _usernameInput = MutableStateFlow(prefsRepo.steamUsername.value)
-    val usernameInput: StateFlow<String> = _usernameInput.asStateFlow()
+    val sessionState: StateFlow<DownloadSessionState> = manager.state
 
-    private val _passwordInput = MutableStateFlow("") // Strictly in-memory, never persisted!
-    val passwordInput: StateFlow<String> = _passwordInput.asStateFlow()
+    val accountName: StateFlow<String> = services.prefs.steamUsername
+    val targetDisplayPath: StateFlow<String> = services.prefs.targetDisplayPath
 
-    private val _twoFactorInput = MutableStateFlow("")
-    val twoFactorInput: StateFlow<String> = _twoFactorInput.asStateFlow()
+    // ---------------- Download configuration inputs ----------------
 
-    // Download Configuration
-    private val _appIdInput = MutableStateFlow("400") // Default Portal 1 App ID
+    private val _appIdInput = MutableStateFlow("400")
     val appIdInput: StateFlow<String> = _appIdInput.asStateFlow()
 
     private val _appNameInput = MutableStateFlow("Portal")
@@ -42,76 +45,76 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     private val _depotIdsInput = MutableStateFlow("")
     val depotIdsInput: StateFlow<String> = _depotIdsInput.asStateFlow()
 
-    private val _manifestIdInput = MutableStateFlow("")
-    val manifestIdInput: StateFlow<String> = _manifestIdInput.asStateFlow()
-
     private val _branchInput = MutableStateFlow("public")
     val branchInput: StateFlow<String> = _branchInput.asStateFlow()
 
-    // DLC Configuration
-    private val _includeDlc = MutableStateFlow(false)
+    private val _includeDlc = MutableStateFlow(true)
     val includeDlc: StateFlow<Boolean> = _includeDlc.asStateFlow()
 
-    private val _dlcDepotId = MutableStateFlow("")
-    val dlcDepotId: StateFlow<String> = _dlcDepotId.asStateFlow()
-
-    private val _dlcMode = MutableStateFlow(DlcMode.BASE_ONLY)
+    private val _dlcMode = MutableStateFlow(DlcMode.BASE_AND_DLC)
     val dlcMode: StateFlow<DlcMode> = _dlcMode.asStateFlow()
-
-    // Storage Management (SAF)
-    val targetUri: StateFlow<String> = prefsRepo.targetUri
-    val targetDisplayPath: StateFlow<String> = prefsRepo.targetDisplayPath
-
-    // Bridge State
-    val bridgeState: StateFlow<BridgeState> = bridge.state
 
     private val _statusNotification = MutableStateFlow<String?>(null)
     val statusNotification: StateFlow<String?> = _statusNotification.asStateFlow()
 
-    fun onUsernameChanged(value: String) {
-        _usernameInput.value = value
-        prefsRepo.saveSteamUsername(value)
-    }
+    /** Room row tracking the active session for download history. */
+    private var historyTaskId: Int? = null
 
-    fun onPasswordChanged(value: String) {
-        _passwordInput.value = value
-    }
-
-    fun onTwoFactorChanged(value: String) {
-        _twoFactorInput.value = value
-    }
-
-    fun onAppIdChanged(value: String) {
-        _appIdInput.value = value
-    }
-
-    fun onAppNameChanged(value: String) {
-        _appNameInput.value = value
-    }
-
-    fun onDepotIdsChanged(value: String) {
-        _depotIdsInput.value = value
-    }
-
-    fun onManifestIdChanged(value: String) {
-        _manifestIdInput.value = value
-    }
-
-    fun onBranchChanged(value: String) {
-        _branchInput.value = value
-    }
-
-    fun onIncludeDlcChanged(enabled: Boolean) {
-        _includeDlc.value = enabled
-        if (!enabled) {
-            _dlcMode.value = DlcMode.BASE_ONLY
-        } else if (_dlcMode.value == DlcMode.BASE_ONLY) {
-            _dlcMode.value = DlcMode.BASE_AND_DLC
+    init {
+        // Keep the Room history row in sync with engine state transitions.
+        viewModelScope.launch {
+            sessionState.collect { state ->
+                if (state.appId == 0) return@collect
+                val previous = sessionStatePhaseTracker
+                sessionStatePhaseTracker = state.phase
+                if (previous == state.phase && state.progressPercent < 100f) return@collect
+                upsertHistoryTask(state)
+            }
         }
     }
 
-    fun onDlcDepotIdChanged(value: String) {
-        _dlcDepotId.value = value
+    private var sessionStatePhaseTracker: SessionPhase = SessionPhase.IDLE
+
+    private suspend fun upsertHistoryTask(state: DownloadSessionState) {
+        val status = when (state.phase) {
+            SessionPhase.DOWNLOADING, SessionPhase.VALIDATING_LICENSE,
+            SessionPhase.ALLOCATING, SessionPhase.VERIFYING -> "DOWNLOADING"
+            SessionPhase.PAUSED -> "PAUSED"
+            SessionPhase.COMPLETED -> "COMPLETED"
+            SessionPhase.FAILED -> "FAILED"
+            SessionPhase.CANCELLED -> "CANCELLED"
+            SessionPhase.IDLE -> return
+        }
+        val dao = services.database.downloadTaskDao()
+        val existing = historyTaskId?.let { dao.getTaskById(it) }
+        val entity = (existing ?: DownloadTaskEntity(appId = state.appId, appName = state.appName)).copy(
+            appId = state.appId,
+            appName = state.appName,
+            branch = state.branch,
+            targetUriString = services.prefs.targetUri.value,
+            targetPathDisplay = state.outputDisplay,
+            status = status,
+            progressPercent = state.progressPercent,
+            downloadSpeed = "%.1f MB/s".format(state.networkBytesPerSec / (1024.0 * 1024.0)),
+            downloadedBytes = state.downloadedBytes,
+            totalBytes = state.totalBytes,
+            totalSizeFormatted = com.example.data.download.DepotDownloadManager.formatBytes(state.totalBytes),
+            timestamp = System.currentTimeMillis()
+        )
+        val id = dao.insertTask(entity).toInt()
+        if (historyTaskId == null && entity.id == 0) historyTaskId = id
+    }
+
+    // ---------------- Input handlers ----------------
+
+    fun onAppIdChanged(value: String) { _appIdInput.value = value }
+    fun onAppNameChanged(value: String) { _appNameInput.value = value }
+    fun onDepotIdsChanged(value: String) { _depotIdsInput.value = value }
+    fun onBranchChanged(value: String) { _branchInput.value = value }
+
+    fun onIncludeDlcChanged(enabled: Boolean) {
+        _includeDlc.value = enabled
+        _dlcMode.value = if (enabled) DlcMode.BASE_AND_DLC else DlcMode.BASE_ONLY
     }
 
     fun onDlcModeChanged(mode: DlcMode) {
@@ -120,92 +123,81 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun setTargetDirectory(uri: Uri, displayPath: String) {
-        prefsRepo.saveTargetDirectory(uri.toString(), displayPath)
-        _statusNotification.value = "Storage Location updated: $displayPath"
+        services.prefs.saveTargetDirectory(uri.toString(), displayPath)
+        manager.setDestination(uri.toString(), displayPath)
+        _statusNotification.value = "Storage location updated: $displayPath"
     }
 
     fun prefillFromLibrary(appId: Int, gameName: String) {
         _appIdInput.value = appId.toString()
         _appNameInput.value = gameName
-        _statusNotification.value = "Pre-filled App ID $appId ($gameName)"
+        _statusNotification.value = "Pre-filled $gameName (app $appId) — press Start to validate licenses & download."
     }
 
+    // ---------------- Engine controls ----------------
+
     fun startDownloadTask() {
-        val appIdInt = _appIdInput.value.toIntOrNull()
-        if (appIdInt == null || appIdInt <= 0) {
-            _statusNotification.value = "Please enter a valid Steam App ID."
+        val appId = _appIdInput.value.toIntOrNull()
+        if (appId == null || appId <= 0) {
+            _statusNotification.value = "Enter a valid Steam App ID first."
+            return
+        }
+        if (authManager.session.value == null) {
+            _statusNotification.value = "Sign in with Steam first — licenses can only be validated with an active session."
+            return
+        }
+        if (manager.state.value.isEngineActive || manager.state.value.phase == SessionPhase.PAUSED) {
+            _statusNotification.value = "A session is already active — pause or cancel it first."
             return
         }
 
-        val task = DownloadTaskEntity(
-            appId = appIdInt,
-            appName = _appNameInput.value.ifBlank { "App $appIdInt" },
-            depotIds = _depotIdsInput.value,
-            manifestId = _manifestIdInput.value,
-            branch = _branchInput.value.ifBlank { "public" },
-            dlcMode = _dlcMode.value.name,
-            dlcDepotId = _dlcDepotId.value,
-            includeDlc = _includeDlc.value,
-            targetUriString = targetUri.value,
-            targetPathDisplay = targetDisplayPath.value,
-            status = "DOWNLOADING"
-        )
+        historyTaskId = null
+        sessionStatePhaseTracker = SessionPhase.IDLE
 
-        viewModelScope.launch {
-            db.downloadTaskDao().insertTask(task)
-            bridge.startDownload(
-                task = task,
-                username = _usernameInput.value,
-                password = _passwordInput.value,
-                twoFactorCode = _twoFactorInput.value,
-                onProgressUpdate = { updatedTask ->
-                    viewModelScope.launch { db.downloadTaskDao().updateTask(updatedTask) }
-                },
-                onComplete = { success, msg ->
-                    _statusNotification.value = if (success) "Download finished!" else "Failed: $msg"
-                }
+        manager.start(
+            DownloadRequest(
+                appId = appId,
+                appName = _appNameInput.value.ifBlank { "App $appId" },
+                branch = _branchInput.value.ifBlank { "public" },
+                dlcMode = _dlcMode.value,
+                depotIds = _depotIdsInput.value,
+                dlcDepotId = ""
             )
-        }
+        ) { authManager.getValidAccessToken() }
+
+        startForegroundServiceSafely()
     }
 
     fun pauseDownload() {
-        bridge.pauseDownload()
-        _statusNotification.value = "Download paused. Partial files preserved."
+        manager.pause()
+        _statusNotification.value = "Pausing at the next chunk boundary…"
     }
 
     fun resumeDownload() {
-        val appIdInt = _appIdInput.value.toIntOrNull() ?: 400
-        val task = DownloadTaskEntity(
-            appId = appIdInt,
-            appName = _appNameInput.value.ifBlank { "App $appIdInt" },
-            depotIds = _depotIdsInput.value,
-            manifestId = _manifestIdInput.value,
-            branch = _branchInput.value.ifBlank { "public" },
-            dlcMode = _dlcMode.value.name,
-            dlcDepotId = _dlcDepotId.value,
-            includeDlc = _includeDlc.value,
-            targetUriString = targetUri.value,
-            targetPathDisplay = targetDisplayPath.value,
-            status = "DOWNLOADING",
-            progressPercent = bridgeState.value.progressPercent
-        )
-        bridge.resumeDownload(
-            task = task,
-            username = _usernameInput.value,
-            password = _passwordInput.value,
-            twoFactorCode = _twoFactorInput.value,
-            onProgressUpdate = { updatedTask ->
-                viewModelScope.launch { db.downloadTaskDao().updateTask(updatedTask) }
-            },
-            onComplete = { success, msg ->
-                _statusNotification.value = if (success) "Download finished!" else "Failed: $msg"
-            }
-        )
+        manager.resume { authManager.getValidAccessToken() }
+        startForegroundServiceSafely()
     }
 
     fun cancelDownload() {
-        bridge.cancelDownload()
-        _statusNotification.value = "Download cancelled."
+        manager.cancel()
+    }
+
+    fun clearPartialData() {
+        val appId = sessionState.value.appId.takeIf { it != 0 } ?: _appIdInput.value.toIntOrNull() ?: return
+        manager.clearStaging(appId)
+        historyTaskId = null
+        _statusNotification.value = "Staged partial data for app $appId cleared."
+    }
+
+    private fun startForegroundServiceSafely() {
+        try {
+            val intent = Intent(getApplication(), DownloadForegroundService::class.java)
+                .setAction(DownloadForegroundService.ACTION_START)
+            ContextCompat.startForegroundService(getApplication(), intent)
+        } catch (e: Exception) {
+            // Notification permission denied / FGS restrictions — the engine
+            // keeps running in-process anyway, so the download is unaffected.
+        }
     }
 
     fun clearNotification() {

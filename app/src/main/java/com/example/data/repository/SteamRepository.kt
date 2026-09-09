@@ -19,9 +19,13 @@ class SteamRepository(
         }
     }
 
-    suspend fun fetchAndStoreGames(steamId: String, apiKey: String): Result<Int> {
+    /**
+     * Fetches the signed-in user's owned games using the access token from the
+     * Steam login flow, and refreshes the local Room cache.
+     */
+    suspend fun fetchAndStoreGames(steamId: String, accessToken: String): Result<Int> {
         return try {
-            val response = apiService.getOwnedGames(apiKey = apiKey, steamId = steamId)
+            val response = apiService.getOwnedGames(accessToken = accessToken, steamId = steamId)
             val gamesList = response.response?.games ?: emptyList()
 
             val entities = gamesList.map { dto ->
@@ -40,5 +44,23 @@ class SteamRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * License probe used by the download engine before it schedules content.
+     * Returns true/false when Steam gave a definitive answer, null when the
+     * check could not be completed (network error etc.).
+     */
+    suspend fun checkAppOwnership(appId: Int, accessToken: String): Boolean? {
+        return try {
+            val response = apiService.checkAppOwnership(accessToken = accessToken, appId = appId)
+            response.response?.appOwnership?.ownsApp
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun clearCachedLibrary() {
+        steamGameDao.clearAll()
     }
 }
