@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -43,7 +44,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.CrashLog
 import com.example.data.auth.AuthState
 import com.example.data.auth.SteamGuardType
 import com.example.ui.components.WhiteCard
@@ -84,11 +88,66 @@ fun LoginScreen(viewModel: AuthViewModel) {
 
     val isBusy = authState is AuthState.Busy
 
+    // Diagnostics (crash report) dialog state — survives sign-in crashes.
+    var showDiagnostics by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    var copiedToClipboard by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(EditorialBackground)
     ) {
+        // 🐞 Diagnostics entry — always reachable, even before any sign-in.
+        // If the app ever misbehaves, this is how the exact reason is shared.
+        TextButton(
+            onClick = {
+                copiedToClipboard = false
+                showDiagnostics = true
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 12.dp, end = 8.dp)
+        ) {
+            Text(
+                text = "🐞 Report",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextSecondaryLight
+            )
+        }
+
+        if (showDiagnostics) {
+            AlertDialog(
+                onDismissRequest = { showDiagnostics = false },
+                title = { Text("Diagnostics", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        text = CrashLog.fullText(),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(320.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(CrashLog.fullText()))
+                            copiedToClipboard = true
+                        }
+                    ) {
+                        Text(if (copiedToClipboard) "COPIED ✓" else "COPY ALL")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDiagnostics = false }) { Text("CLOSE") }
+                }
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()

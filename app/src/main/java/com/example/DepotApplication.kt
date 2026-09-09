@@ -46,6 +46,10 @@ class DepotApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // FIRST: arm the crash recorder — anything that escapes later on any
+        // thread lands in Diagnostics instead of vanishing.
+        CrashLog.init(this)
+
         prefs = UserPreferencesRepository(this)
         database = AppDatabase.getDatabase(this)
         steamApi = SteamApiService.create()

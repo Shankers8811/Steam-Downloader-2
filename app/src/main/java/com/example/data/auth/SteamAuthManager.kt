@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.example.CrashLog
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
@@ -87,17 +88,26 @@ class SteamAuthManager(
 
         _authState.value = AuthState.Busy("Restoring your signed-in session…")
         loginJob = scope.launch {
-            val result = runtime.logonWithToken(saved.accountName, saved.refreshToken)
-            if (result == EResult.OK) {
-                val steamId = runtime.accountSteamId.value?.takeIf { it.isNotBlank() } ?: saved.steamId
-                val restored = saved.copy(steamId = steamId)
-                _session.value = restored
-                if (vault.isRemembered()) vault.saveSession(restored)
-                onSessionEstablished(restored)
-                _authState.value = AuthState.LoggedIn(restored)
-            } else {
-                runtime.log("Session restore failed ($result) — asking for credentials.")
-                _authState.value = AuthState.Error(logonErrorMessage(result), saved.accountName)
+            try {
+                val result = runtime.logonWithToken(saved.accountName, saved.refreshToken)
+                if (result == EResult.OK) {
+                    val steamId = runtime.accountSteamId.value?.takeIf { it.isNotBlank() } ?: saved.steamId
+                    val restored = saved.copy(steamId = steamId)
+                    _session.value = restored
+                    if (vault.isRemembered()) vault.saveSession(restored)
+                    onSessionEstablished(restored)
+                    _authState.value = AuthState.LoggedIn(restored)
+                } else {
+                    runtime.log("Session restore failed ($result) — asking for credentials.")
+                    _authState.value = AuthState.Error(logonErrorMessage(result), saved.accountName)
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                CrashLog.record("restoreSavedSession", t)
+                _authState.value = AuthState.Error(
+                    "Session restore hit an internal error (${t.javaClass.simpleName}) — sign in again.",
+                    saved.accountName
+                )
             }
         }
     }
@@ -181,8 +191,17 @@ class SteamAuthManager(
                 _authState.value = AuthState.Error("Steam is not ready yet — try again.", trimmedName)
             } catch (e: Exception) {
                 runtime.log("Sign-in error: ${e.javaClass.simpleName}: ${e.message}")
+                CrashLog.record("beginPasswordLogin", e)
                 _authState.value = AuthState.Error(
                     "Sign-in failed (${e.javaClass.simpleName}). Check your connection and try again.",
+                    trimmedName
+                )
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                CrashLog.record("beginPasswordLogin (Error)", t)
+                runtime.log("Sign-in CRASH class: ${t.javaClass.simpleName}: ${t.message}")
+                _authState.value = AuthState.Error(
+                    "Sign-in hit an internal error (${t.javaClass.simpleName}). Open Diagnostics (🐞) and share the log.",
                     trimmedName
                 )
             } finally {
@@ -235,6 +254,10 @@ class SteamAuthManager(
                     _guardError.value = "That code was rejected (${e.result?.name ?: "error"}) — try the current code."
                 } catch (e: Exception) {
                     _guardError.value = "Could not submit the code (${e.javaClass.simpleName}) — try again."
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    CrashLog.record("submitGuardCode (Error)", t)
+                    _guardError.value = "Code submission hit an internal error (${t.javaClass.simpleName})."
                 }
             }
             return
@@ -389,6 +412,11 @@ class SteamAuthManager(
                 future.completeExceptionally(AuthenticationException("Code entry cancelled"))
             } catch (e: Exception) {
                 future.completeExceptionally(e)
+            } catch (t: Throwable) {
+                CrashLog.record("awaitUiCode (Error)", t)
+                future.completeExceptionally(
+                    AuthenticationException("Guard flow internal error (${t.javaClass.simpleName})")
+                )
             }
         }
         return future

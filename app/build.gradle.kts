@@ -28,9 +28,20 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    // NOTE: no custom debugConfig — AGP auto-signs debug builds with its own
-    // debug keystore, so anyone can build the APK (CI included) without
-    // repo-local keystore files.
+    // Shared debug signing: a FIXED keystore committed to the repo, so EVERY
+    // build (CI runner, any developer machine, today or next year) signs debug
+    // APKs with the same certificate. That lets an installed debug APK update
+    // in place instead of Android rejecting installs for signature mismatch.
+    // (The old default — an auto-generated key per machine — is what made
+    // every CI build un-installable over the previous one.)
+    // NEVER use this key for store releases: it is public in the repo.
+    create("debugConfig") {
+      storeFile = file("${rootDir}/debug.keystore")
+      storeType = "PKCS12"
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
   }
 
   buildTypes {
@@ -40,7 +51,7 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { /* implicit debug signing */ }
+    debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

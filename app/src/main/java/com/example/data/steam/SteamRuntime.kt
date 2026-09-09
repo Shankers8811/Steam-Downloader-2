@@ -2,6 +2,7 @@ package com.example.data.steam
 
 import android.content.Context
 import android.os.Build
+import com.example.CrashLog
 import `in`.dragonbra.javasteam.enums.EResult
 import `in`.dragonbra.javasteam.networking.steam3.ProtocolTypes
 import `in`.dragonbra.javasteam.steam.discovery.FileServerListProvider
@@ -160,7 +161,19 @@ class SteamRuntime(private val context: Context) {
                     callbackManager?.runWaitCallbacks(1000L)
                 } catch (e: Exception) {
                     log("Callback pump error: ${e.message}")
+                    CrashLog.record("callback-pump", e)
                     delay(500L)
+                } catch (t: Throwable) {
+                    // JavaSteam callback machinery can throw Errors (linkage /
+                    // serviceloader family) — record and keep the pump alive
+                    // rather than silently freezing the whole CM connection.
+                    log("Callback pump ERROR: ${t.javaClass.simpleName}: ${t.message}")
+                    CrashLog.record("callback-pump (Error)", t)
+                    try {
+                        delay(2_000L)
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    }
                 }
             }
         }
