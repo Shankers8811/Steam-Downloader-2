@@ -100,6 +100,8 @@ object CrashLog {
         )
         appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
         appendLine()
+        append(deepClassCheck())
+        appendLine()
         try {
             val f = logFile
             if (f != null && f.exists() && f.length() > 0) {
@@ -119,5 +121,59 @@ object CrashLog {
         appendLine()
         appendLine("====== this process ======")
         append(recentText())
+    }
+
+    /**
+     * Loads each class known to be on the sign-in / download path (via
+     * [Class.forName], which runs the class's static initializer) and reports
+     * which ones fail with the FULL cause chain. This is how an
+     * `ExceptionInInitializerError` on a real device is unmasked: it tells us
+     * exactly WHICH class died and WHAT was actually missing underneath.
+     */
+    fun deepClassCheck(): String {
+        val interesting = listOf(
+            "in.dragonbra.javasteam.enums.EOSType",
+            "in.dragonbra.javasteam.enums.EResult",
+            "in.dragonbra.javasteam.protobufs.steamclient.SteammessagesAuthSteamclient",
+            "in.dragonbra.javasteam.protobufs.steamclient.Enums",
+            "in.dragonbra.javasteam.rpc.service.Authentication",
+            "in.dragonbra.javasteam.util.crypto.CryptoHelper",
+            "in.dragonbra.javasteam.steam.handlers.steamunifiedmessages.SteamUnifiedMessages",
+            "in.dragonbra.javasteam.networking.steam3.WebSocketConnection",
+            "com.google.protobuf.ExtensionRegistryLite",
+            "io.ktor.client.HttpClient",
+            "io.ktor.client.engine.cio.CIO",
+            "io.ktor.client.plugins.websocket.WebSockets",
+            "okhttp3.OkHttpClient",
+            "com.squareup.okio.Buffer",
+            "kotlinx.serialization.json.Json",
+            "org.apache.commons.lang3.StringUtils"
+        )
+        val sb = StringBuilder("====== deep class check ======\n")
+        var failures = 0
+        for (name in interesting) {
+            try {
+                Class.forName(name)
+                sb.append("OK    ").append(name).append('\n')
+            } catch (t: Throwable) {
+                failures++
+                sb.append("FAIL  ").append(name)
+                    .append("  ->  ").append(t.javaClass.name)
+                    .append(": ").append(t.message ?: "(no message)").append('\n')
+                var cause: Throwable? = t.cause
+                var depth = 1
+                while (cause != null && depth <= 5) {
+                    sb.append("      caused-by[").append(depth).append("]: ")
+                        .append(cause.javaClass.name)
+                        .append(": ").append(cause.message ?: "(no message)").append('\n')
+                    val top = cause.stackTrace?.firstOrNull()
+                    if (top != null) sb.append("        at ").append(top.toString()).append('\n')
+                    cause = cause.cause
+                    depth++
+                }
+            }
+        }
+        if (failures == 0) sb.append("ALL OK — no class-init failures detected at probe time.\n")
+        return sb.toString()
     }
 }
