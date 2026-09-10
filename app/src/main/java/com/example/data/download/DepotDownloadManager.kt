@@ -60,6 +60,16 @@ class DepotDownloadManager(
 
     private var engineJob: Job? = null
 
+    /**
+     * Live engine instance of the current session. Kept so that an emergency
+     * CANCEL can close the downloader's OWN internal coroutine scope — that
+     * kills in-flight CDN reads immediately instead of politely waiting for
+     * the current chunk to finish (possibly hanging forever on a stalled
+     * connection). This is what makes cancel truly instant.
+     */
+    @Volatile
+    private var activeDownloader: DepotDownloader? = null
+
     @Volatile
     private var lastRequest: DownloadRequest? = null
 
@@ -117,13 +127,16 @@ class DepotDownloadManager(
         engineJob = scope.launch { runEngine(request, tokenProvider, isResume = true) }
     }
 
-    /** Pauses at the next chunk boundary; staging keeps the safe position. */
+    /** Pauses promptly; staging keeps the safe position for a later resume. */
     fun pause() {
         if (engineJob?.isActive != true) return
         if (controlSignal == ControlSignal.NONE) {
             controlSignal = ControlSignal.PAUSE
-            log(LogLevel.INFO, "Pause requested — stopping at the next chunk boundary…")
+            log(LogLevel.INFO, "Pause requested — stopping the engine; progress so far is kept…")
         }
+        // Close the downloader's internal scope so pause is immediate even if
+        // a CDN read is stalled, then cancel the engine job.
+        runCatching { activeDownloader?.close() }
         engineJob?.cancel()
     }
 
@@ -132,6 +145,10 @@ class DepotDownloadManager(
         if (controlSignal == ControlSignal.NONE) {
             controlSignal = ControlSignal.CANCEL
         }
+        // Instant abort: close the downloader's internal scope (kills socket
+        // reads), then cancel our engine job. Staging/ledger stay on disk so
+        // a later resume is still possible — "emergency stop", not "delete".
+        runCatching { activeDownloader?.close() }
         engineJob?.cancel()
     }
 
@@ -290,6 +307,7 @@ class DepotDownloadManager(
                 // positional slot (maxDecompress) that would silently shift any
                 // positional call.
             )
+            activeDownloader = downloader
 
             val failedErrors = mutableListOf<String>()
             downloader.addListener(object : IDownloadListener {
@@ -471,6 +489,8 @@ class DepotDownloadManager(
             } else {
                 failEngine("${e.javaClass.simpleName}: ${e.message ?: "unknown error"}")
             }
+        } finally {
+            activeDownloader = null
         }
     }
 

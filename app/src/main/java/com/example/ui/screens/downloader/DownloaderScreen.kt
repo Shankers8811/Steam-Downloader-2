@@ -408,7 +408,7 @@ fun DownloaderScreen(
                         }
                         Button(
                             onClick = { viewModel.cancelDownload() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF), contentColor = Color.White),
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed.copy(alpha = 0.90f), contentColor = Color.White),
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier
                                 .weight(1f)
@@ -437,11 +437,7 @@ fun DownloaderScreen(
                         }
                         Button(
                             onClick = { viewModel.cancelDownload() },
-                            enabled = false,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0x22FFFFFF),
-                                contentColor = Color(0x66FFFFFF)
-                            ),
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed.copy(alpha = 0.90f), contentColor = Color.White),
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier
                                 .weight(1f)
