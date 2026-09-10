@@ -3,6 +3,8 @@ package com.example.ui.screens.downloader
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoveUp
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Shield
@@ -34,6 +37,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.SnackbarHost
@@ -74,10 +79,19 @@ import com.example.ui.theme.TextSecondaryLight
 import com.example.ui.theme.WarningOrange
 import com.example.ui.util.FormatUtils
 
+/** Steam client / store palette (matches the LibraryScreen). */
+private val SteamBg = Color(0xFF171A21)
+private val SteamPanel = Color(0xFF1B2838)
+private val SteamPanelHi = Color(0xFF2A475E)
+private val SteamText = Color(0xFFC7D5E0)
+private val SteamTextDim = Color(0xFF8F98A0)
+private val SteamAccent = Color(0xFF66C0F4)
+
 /**
  * Steam-style download manager: license check first, then live download
  * statistics (internet speed, disk write speed, ETA), chunk-boundary pausing
- * and a file-by-file view of what is staged vs installed.
+ * and a file-by-file view of what is staged vs installed. Store rule baked
+ * in: downloads are limited to items the account actually owns.
  */
 @Composable
 fun DownloaderScreen(
@@ -96,7 +110,9 @@ fun DownloaderScreen(
     val branchInput by viewModel.branchInput.collectAsStateWithLifecycle()
     val includeDlc by viewModel.includeDlc.collectAsStateWithLifecycle()
     val dlcMode by viewModel.dlcMode.collectAsStateWithLifecycle()
+    val ownedGames by viewModel.ownedGames.collectAsStateWithLifecycle()
 
+    var pickerSearch by remember { mutableStateOf("") }
     var isFilesExpanded by remember { mutableStateOf(false) }
     var isConsoleExpanded by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -540,6 +556,114 @@ fun DownloaderScreen(
             // ---------------- License report ----------------
             state.licenseReport?.let { report ->
                 LicenseReportCard(report = report)
+            }
+
+            // ---------------- Your games — pick what to download ----------------
+            // Like the Steam store: this tab downloads ONLY items on the
+            // account. Typing an App ID you don't own is refused by the
+            // ownership guard in the ViewModel.
+            Surface(
+                color = SteamPanel,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "OWNED BY YOU — TAP TO SELECT",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SteamAccent,
+                        letterSpacing = 1.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${ownedGames.size} games on this account · owned DLC appears on each game's details page",
+                        fontSize = 10.sp,
+                        color = SteamTextDim
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = pickerSearch,
+                        onValueChange = { pickerSearch = it },
+                        placeholder = { Text("Filter your games…", color = SteamTextDim, fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Filled.Search, contentDescription = null, tint = SteamTextDim)
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = SteamBg,
+                            unfocusedContainerColor = SteamBg,
+                            focusedBorderColor = SteamAccent,
+                            unfocusedBorderColor = SteamPanelHi,
+                            focusedTextColor = SteamText,
+                            unfocusedTextColor = SteamText
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val filteredOwned = remember(ownedGames, pickerSearch) {
+                        val owned = ownedGames.filter { it.appId > 0 }
+                        if (pickerSearch.isBlank()) owned
+                        else owned.filter { it.name.contains(pickerSearch, ignoreCase = true) }
+                    }
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(SteamBg)
+                    ) {
+                        items(filteredOwned, key = { it.appId }) { g ->
+                            val isSelected = appIdInput == g.appId.toString()
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (isSelected) SteamPanelHi else Color.Transparent)
+                                    .clickable {
+                                        viewModel.prefillFromLibrary(g.appId, g.name)
+                                        pickerSearch = ""
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = g.name,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
+                                    color = SteamText,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = "App ${g.appId}",
+                                    fontSize = 10.sp,
+                                    color = SteamTextDim
+                                )
+                            }
+                        }
+                        if (filteredOwned.isEmpty()) {
+                            item {
+                                Text(
+                                    text = if (ownedGames.isEmpty())
+                                        "Library not synced — open the Steam Library tab once so your games load."
+                                    else "No owned items match \"$pickerSearch\".",
+                                    fontSize = 12.sp,
+                                    color = SteamTextDim,
+                                    modifier = Modifier.padding(14.dp)
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Like the Steam store: anything you don't own is refused.",
+                        fontSize = 10.sp,
+                        color = SteamTextDim
+                    )
+                }
             }
 
             // ---------------- Target configuration ----------------

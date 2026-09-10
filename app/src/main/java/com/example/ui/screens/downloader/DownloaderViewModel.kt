@@ -15,6 +15,7 @@ import com.example.service.DownloadForegroundService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -32,6 +33,16 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
 
     val accountName: StateFlow<String> = services.prefs.steamUsername
 
+    /** Everything this account owns (the same native inventory the library
+     *  shows) — the Downloader ONLY downloads items from this list. */
+    private val steamRepo = services.steamRepository
+    val ownedGames: StateFlow<List<com.example.data.db.SteamGameEntity>> = steamRepo.allGames
+        .stateIn(
+            scope = viewModelScope,
+            started = kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000L),
+            initialValue = emptyList()
+        )
+
     /** The real, on-disk install root (works as a real path for the native
      *  downloader AND shows up over USB MTP — SAF tree-URIs don't). */
     val installRootDisplay: StateFlow<String> =
@@ -39,10 +50,10 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
 
     // ---------------- Download configuration inputs ----------------
 
-    private val _appIdInput = MutableStateFlow("400")
+    private val _appIdInput = MutableStateFlow("")
     val appIdInput: StateFlow<String> = _appIdInput.asStateFlow()
 
-    private val _appNameInput = MutableStateFlow("Portal")
+    private val _appNameInput = MutableStateFlow("")
     val appNameInput: StateFlow<String> = _appNameInput.asStateFlow()
 
     private val _depotIdsInput = MutableStateFlow("")
@@ -155,21 +166,46 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
-        historyTaskId = null
-        sessionStatePhaseTracker = SessionPhase.IDLE
+        // Store rule: only items on THIS account may be downloaded. The
+        // license set comes from the CM connection (same source the library
+        // and the DLC page use) — anything not there is rejected up front,
+        // exactly like the store hiding Install buttons for non-owners.
+        viewModelScope.launch {
+            val licensed = try {
+                services.steamRuntime.getLicensedAppIds()
+            } catch (e: Exception) {
+                null
+            } catch (t: Throwable) {
+                com.example.CrashLog.record("ownership guard", t)
+                null
+            }
+            if (licensed == null) {
+                _statusNotification.value =
+                    "Couldn't verify ownership right now — open the Library once so the license scan runs, then retry."
+                return@launch
+            }
+            if (!licensed.contains(appId)) {
+                _statusNotification.value =
+                    "App $appId is not on your account — like the Steam store, you can only download what you own."
+                return@launch
+            }
 
-        manager.start(
-            DownloadRequest(
-                appId = appId,
-                appName = _appNameInput.value.ifBlank { "App $appId" },
-                branch = _branchInput.value.ifBlank { "public" },
-                dlcMode = _dlcMode.value,
-                depotIds = _depotIdsInput.value,
-                dlcDepotId = ""
-            )
-        ) { authManager.getValidAccessToken() }
+            historyTaskId = null
+            sessionStatePhaseTracker = SessionPhase.IDLE
 
-        startForegroundServiceSafely()
+            manager.start(
+                DownloadRequest(
+                    appId = appId,
+                    appName = _appNameInput.value.ifBlank { "App $appId" },
+                    branch = _branchInput.value.ifBlank { "public" },
+                    dlcMode = _dlcMode.value,
+                    depotIds = _depotIdsInput.value,
+                    dlcDepotId = ""
+                )
+            ) { authManager.getValidAccessToken() }
+
+            startForegroundServiceSafely()
+        }
     }
 
     fun pauseDownload() {

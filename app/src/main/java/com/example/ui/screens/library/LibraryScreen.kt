@@ -316,9 +316,11 @@ fun LibraryScreen(
             if (!isLoading && searchQuery.isBlank() && filteredGames.isNotEmpty()) {
                 val hero = filteredGames.maxByOrNull { it.playtimeForever } ?: filteredGames.first()
                 item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
-                    StoreHeroCapsule(game = hero, onGet = {
-                        onNavigateToDownloaderWithAppId(hero.appId, hero.name)
-                    })
+                    StoreHeroCapsule(
+                        game = hero,
+                        onTap = { viewModel.openGameDetails(hero) },
+                        onGet = { onNavigateToDownloaderWithAppId(hero.appId, hero.name) }
+                    )
                 }
             }
 
@@ -387,6 +389,7 @@ fun LibraryScreen(
 @Composable
 private fun StoreHeroCapsule(
     game: SteamGameEntity,
+    onTap: () -> Unit,
     onGet: () -> Unit
 ) {
     Surface(
@@ -395,6 +398,7 @@ private fun StoreHeroCapsule(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 4.dp)
+            .clickable(onClick = onTap)
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
             AsyncImage(
