@@ -4,16 +4,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -29,6 +33,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -46,21 +52,35 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.db.SteamGameEntity
-import com.example.ui.components.WhiteCard
-import com.example.ui.components.WhiteTextField
-import com.example.ui.theme.EditorialBackground
-import com.example.ui.theme.TextPrimaryLight
-import com.example.ui.theme.TextSecondaryDark
-import com.example.ui.theme.TextSecondaryLight
+
+/** Steam client / store palette (matches the desktop + mobile app). */
+private val SteamBg = Color(0xFF171A21)
+private val SteamPanel = Color(0xFF1B2838)
+private val SteamPanelHi = Color(0xFF2A475E)
+private val SteamText = Color(0xFFC7D5E0)
+private val SteamTextDim = Color(0xFF8F98A0)
+private val SteamAccent = Color(0xFF66C0F4)
+private val SteamBuy = Color(0xFF5BA32B)
+
+private fun formatPlaytime(minutes: Int): String =
+    if (minutes <= 0) "Not played yet"
+    else {
+        val hours = minutes / 60f
+        if (hours < 10f) "%.1f h played".format(hours)
+        else "%.0f h played".format(hours)
+    }
 
 /**
- * The signed-in user's Steam library, synced from their account after login.
+ * The signed-in user's Steam library — complete, games-only (native CM
+ * licenses + PICS), presented like the Steam client: dark theme, capsule
+ * art grid, search, sort and per-game download action.
  */
 @Composable
 fun LibraryScreen(
@@ -93,7 +113,7 @@ fun LibraryScreen(
 
     val sortedGames = remember(games, sortOrder) {
         when (sortOrder) {
-            SortOrder.NAME -> games.sortedBy { it.name }
+            SortOrder.NAME -> games.sortedBy { it.name.lowercase() }
             SortOrder.PLAYTIME -> games.sortedByDescending { it.playtimeForever }
             SortOrder.APP_ID -> games.sortedBy { it.appId }
         }
@@ -102,294 +122,186 @@ fun LibraryScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(EditorialBackground)
+            .background(SteamBg)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(20.dp)
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 175.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // ---------------- Header ----------------
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            // ---------------- Sticky-style header (spans full width) ----------------
+            item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
                 Column {
-                    Text(
-                        text = "SIGNED IN AS ${session?.accountName?.uppercase() ?: "—"}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0x80FFFFFF),
-                        letterSpacing = 2.sp,
-                        maxLines = 1
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "STEAM ",
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Color.White,
-                            letterSpacing = (-1).sp
-                        )
-                        Text(
-                            text = "LIBRARY",
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Color(0x66FFFFFF),
-                            letterSpacing = (-1).sp
-                        )
-                    }
-                }
-
-                Row {
-                    IconButton(
-                        onClick = { viewModel.fetchGames() },
-                        enabled = !isLoading && session != null,
-                        modifier = Modifier.testTag("refresh_library_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Refresh,
-                            contentDescription = "Refresh library",
-                            tint = if (session != null) Color.White else Color(0x44FFFFFF)
-                        )
-                    }
-                    IconButton(
-                        onClick = { viewModel.signOut() },
-                        modifier = Modifier.testTag("sign_out_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Logout,
-                            contentDescription = "Sign out",
-                            tint = Color.White
-                        )
-                    }
-                }
-            }
-
-            // ---------------- Account / sync status card ----------------
-            WhiteCard(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "ACCOUNT LIBRARY",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0x66000000),
-                            letterSpacing = 1.5.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${games.size} games owned",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Black,
-                            color = TextPrimaryLight
-                        )
-                        Text(
-                            text = when {
-                                session == null -> "Not signed in"
-                                games.isEmpty() && !isLoading -> "Tap refresh to sync your licenses"
-                                else -> "Steam ID ${session?.steamId ?: "—"}"
-                            },
-                            fontSize = 12.sp,
-                            color = TextSecondaryLight,
-                            maxLines = 1
-                        )
-                    }
-
-                    Surface(
-                        color = if (session != null) Color(0xFF09090B) else Color(0xFFEF4444),
-                        shape = RoundedCornerShape(20.dp)
-                    ) {
-                        Text(
-                            text = if (session != null) "ONLINE" else "OFFLINE",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // ---------------- Search & sort card ----------------
-            WhiteCard(modifier = Modifier.fillMaxWidth()) {
-                WhiteTextField(
-                    value = searchQuery,
-                    onValueChange = { viewModel.onSearchQueryChanged(it) },
-                    label = "Filter your library",
-                    placeholder = "Search game title or App ID…",
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.Search,
-                            contentDescription = "Search",
-                            tint = Color(0xFF71717A)
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
-                                Icon(
-                                    imageVector = Icons.Filled.Clear,
-                                    contentDescription = "Clear",
-                                    tint = Color(0xFF71717A)
-                                )
-                            }
-                        }
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "SORT BY:",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextSecondaryLight,
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-
-                    SortOrder.values().forEach { order ->
-                        val selected = sortOrder == order
-                        FilterChip(
-                            selected = selected,
-                            onClick = { viewModel.onSortOrderChanged(order) },
-                            label = {
-                                Text(
-                                    text = when (order) {
-                                        SortOrder.NAME -> "NAME"
-                                        SortOrder.PLAYTIME -> "PLAYTIME"
-                                        SortOrder.APP_ID -> "APP ID"
-                                    },
-                                    fontSize = 11.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFF09090B),
-                                selectedLabelColor = Color.White,
-                                containerColor = Color(0xFFF4F4F5),
-                                labelColor = TextPrimaryLight
-                            ),
-                            modifier = Modifier.padding(end = 6.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            when {
-                isLoading -> {
-                    Box(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = Color.White)
-                            Spacer(modifier = Modifier.height(12.dp))
+                        Column {
                             Text(
-                                text = "Syncing your Steam library…",
-                                color = TextSecondaryDark,
-                                fontSize = 13.sp
+                                text = "LIBRARY",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Black,
+                                color = SteamText,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = if (session != null)
+                                    "${games.size} games you own — ${
+                                        (session?.accountName ?: "")
+                                    }"
+                                else "Sign in to see your games",
+                                fontSize = 11.sp,
+                                color = SteamTextDim
                             )
                         }
-                    }
-                }
-
-                sortedGames.isEmpty() -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        WhiteCard(modifier = Modifier.padding(8.dp)) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(20.dp)
-                            ) {
+                        Row {
+                            IconButton(onClick = { viewModel.fetchGames() }) {
                                 Icon(
-                                    imageVector = Icons.Filled.SportsEsports,
-                                    contentDescription = null,
-                                    tint = Color(0xFF09090B),
-                                    modifier = Modifier.size(48.dp)
+                                    imageVector = Icons.Filled.Refresh,
+                                    contentDescription = "Sync library",
+                                    tint = SteamAccent
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = if (searchQuery.isBlank()) "Nothing synced yet" else "No games matched",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimaryLight
+                            }
+                            IconButton(onClick = { viewModel.signOut() }) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Logout,
+                                    contentDescription = "Sign out",
+                                    tint = SteamTextDim
                                 )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = if (searchQuery.isBlank())
-                                        "Pull your licensed games from your Steam account — everything you own appears here and can be downloaded."
-                                    else
-                                        "No owned game matches '$searchQuery'.",
-                                    fontSize = 13.sp,
-                                    color = TextSecondaryLight,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(horizontal = 8.dp)
-                                )
-                                if (searchQuery.isBlank()) {
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Button(
-                                        onClick = { viewModel.fetchGames() },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF09090B)),
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier.testTag("sync_library_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Refresh,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("SYNC MY LIBRARY", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                                    }
-                                }
                             }
                         }
                     }
-                }
 
-                else -> {
-                    LazyColumn(
+                    // -------- Search (Steam-dark) --------
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = viewModel::onSearchQueryChanged,
+                        placeholder = {
+                            Text("Search your games", color = SteamTextDim, fontSize = 13.sp)
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Filled.Search, contentDescription = null, tint = SteamTextDim)
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+                                    Icon(
+                                        Icons.Filled.Clear,
+                                        contentDescription = "Clear search",
+                                        tint = SteamTextDim
+                                    )
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = SteamPanel,
+                            unfocusedContainerColor = SteamPanel,
+                            focusedBorderColor = SteamAccent,
+                            unfocusedBorderColor = SteamPanelHi,
+                            focusedTextColor = SteamText,
+                            unfocusedTextColor = SteamText
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // -------- Sort chips --------
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(sortedGames, key = { it.appId }) { game ->
-                            GameCardItem(
-                                game = game,
-                                onDownloadClicked = {
-                                    onNavigateToDownloaderWithAppId(game.appId, game.name)
-                                }
+                        SortOrder.entries.forEach { order ->
+                            FilterChip(
+                                selected = sortOrder == order,
+                                onClick = { viewModel.onSortOrderChanged(order) },
+                                label = {
+                                    Text(
+                                        when (order) {
+                                            SortOrder.NAME -> "A–Z"
+                                            SortOrder.PLAYTIME -> "Most played"
+                                            SortOrder.APP_ID -> "App ID"
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    containerColor = SteamPanel,
+                                    labelColor = SteamTextDim,
+                                    selectedContainerColor = SteamPanelHi,
+                                    selectedLabelColor = SteamAccent
+                                ),
+                                border = null,
+                                modifier = Modifier.testTag("sort_${order.name}")
+                            )
+                        }
+                    }
+
+                    if (isLoading) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = SteamAccent,
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Scanning your licenses with Steam…",
+                                fontSize = 11.sp,
+                                color = SteamTextDim
                             )
                         }
                     }
                 }
+            }
+
+            // ---------------- Games ----------------
+            if (!isLoading && sortedGames.isEmpty()) {
+                item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 60.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SportsEsports,
+                            contentDescription = null,
+                            tint = SteamPanelHi,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = if (searchQuery.isBlank())
+                                "Library is empty — tap the sync icon."
+                            else "No games match \"$searchQuery\"",
+                            color = SteamTextDim,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            items(sortedGames, key = { it.appId }) { game ->
+                GameCapsule(
+                    game = game,
+                    onGet = { onNavigateToDownloaderWithAppId(game.appId, game.name) }
+                )
             }
         }
 
@@ -400,88 +312,69 @@ fun LibraryScreen(
     }
 }
 
+/** A game capsule card like the Steam client grid: header art + title + get. */
 @Composable
-fun GameCardItem(
+private fun GameCapsule(
     game: SteamGameEntity,
-    onDownloadClicked: () -> Unit
+    onGet: () -> Unit
 ) {
-    WhiteCard(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
+    Surface(
+        color = SteamPanel,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(game.imgHeaderUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = game.name,
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(width = 110.dp, height = 65.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF18181B))
-            ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(game.imgHeaderUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = game.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
+                    .fillMaxWidth()
+                    .aspectRatio(460f / 215f)
+                    .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
+                    .background(SteamPanelHi)
+            )
+            Column(modifier = Modifier.padding(10.dp)) {
                 Text(
                     text = game.name,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = TextPrimaryLight,
+                    color = SteamText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = formatPlaytime(game.playtimeForever),
+                    fontSize = 10.sp,
+                    color = SteamTextDim,
                     maxLines = 1
                 )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 4.dp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onGet,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SteamBuy,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(32.dp)
+                        .testTag("get_${game.appId}")
                 ) {
-                    Surface(
-                        color = Color(0xFF09090B),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = "APP ${game.appId}",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    val playtimeHours = game.playtimeForever / 60.0
-                    Text(
-                        text = if (playtimeHours > 0) "%.1f hrs".format(playtimeHours) else "Unplayed",
-                        fontSize = 11.sp,
-                        color = TextSecondaryLight
+                    Icon(
+                        imageVector = Icons.Filled.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("DOWNLOAD", fontSize = 10.sp, fontWeight = FontWeight.Black)
                 }
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Button(
-                onClick = onDownloadClicked,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF09090B),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("download_game_${game.appId}")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Download,
-                    contentDescription = "Download ${game.name}",
-                    modifier = Modifier.size(16.dp)
-                )
             }
         }
     }

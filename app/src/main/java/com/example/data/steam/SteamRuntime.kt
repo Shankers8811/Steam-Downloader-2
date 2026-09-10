@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -361,8 +362,103 @@ class SteamRuntime(private val context: Context) {
         }
     }
 
-    private fun parseDepotPlan(
-        keyValues: KeyValue,
+    /**
+     * Builds the complete owned-games inventory exactly the way the Steam
+     * client does: account licenses (CM) -> licensed packages -> app ids ->
+     * PICS metadata filtered to type == "Game".
+     *
+     * DLC / soundtracks / tools / dedicated servers are excluded at the
+     * source (their common.type is not "game"). Unlike
+     * IPlayerService/GetOwnedGames this also includes never-played free
+     * titles, i.e. NO silent missing games.
+     *
+     * @return (appId, displayName) pairs; empty when the CM license list
+     *         isn't populated yet (caller decides on a web-API fallback).
+     */
+    suspend fun buildOwnedGameLibrary(): List<Pair<Int, String>> = withContext(Dispatchers.IO) {
+        val packageIds = _licenses.value.map { it.packageID }.distinct().sorted()
+        if (packageIds.isEmpty()) {
+            log("Native library build skipped — CM license list is empty.")
+            return@withContext emptyList()
+        }
+
+        val appsH = requireNotNull(client.getHandler(SteamApps::class.java)) {
+            "SteamApps handler unavailable — SteamClient not initialized"
+        }
+
+        // ---------- Phase 1: resolve every licensed package to its app ids.
+        val grantedAppIds = sortedSetOf<Int>()
+        packageIds.chunked(LIBRARY_BATCH).forEachIndexed { index, chunk ->
+            val rs = try {
+                withTimeoutOrNull(LIBRARY_TIMEOUT_MS) {
+                    appsH.picsGetProductInfo(
+                        apps = emptyList(),
+                        packages = chunk.map { PICSRequest(id = it) }
+                    ).await()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("Library: package batch ${index + 1} failed (${e.message})")
+                null
+            } catch (t: Throwable) {
+                CrashLog.record("library packages batch", t)
+                null
+            }
+            rs?.results?.forEach { info ->
+                info.packages.values.forEach { pkg ->
+                    pkg.keyValues["appids"].children.forEach { child ->
+                        val id = child.value?.trim()?.toIntOrNull()
+                            ?: child.name.trim().toIntOrNull()
+                        if (id != null && id > 0) grantedAppIds += id
+                    }
+                }
+            }
+        }
+        if (grantedAppIds.isEmpty()) {
+            log("Library: licenses resolved to zero apps.")
+            return@withContext emptyList()
+        }
+
+        // ---------- Phase 2: PICS metadata per app, keep real games only.
+        val owned = linkedMapOf<Int, String>()
+        grantedAppIds.chunked(LIBRARY_BATCH).forEachIndexed { index, chunk ->
+            val rs = try {
+                withTimeoutOrNull(LIBRARY_TIMEOUT_MS) {
+                    appsH.picsGetProductInfo(
+                        apps = chunk.map { PICSRequest(id = it) },
+                        packages = emptyList()
+                    ).await()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("Library: app batch ${index + 1} failed (${e.message})")
+                null
+            } catch (t: Throwable) {
+                CrashLog.record("library apps batch", t)
+                null
+            }
+            rs?.results?.forEach { info ->
+                info.apps.forEach { (appId, product) ->
+                    val common = product.keyValues["common"]
+                    val type = common["type"].value.orEmpty().lowercase()
+                    if (type == "game") {
+                        val name = common["name"].value?.takeIf { it.isNotBlank() }
+                            ?: "App $appId"
+                        owned[appId] = name
+                    }
+                }
+            }
+        }
+        log(
+            "Native library: ${owned.size} games from ${grantedAppIds.size} apps, " +
+                "${packageIds.size} licenses (DLC/tools excluded by type)."
+        )
+        owned.entries.map { it.key to it.value }
+    }
+
+    private fun parseDepotPlan(        keyValues: KeyValue,
         branch: String,
         language: String?
     ): List<DepotPlanEntry> {
@@ -442,5 +538,13 @@ class SteamRuntime(private val context: Context) {
         subscriptions.forEach { runCatching { it.close() } }
         subscriptions.clear()
         runCatching { client.disconnect() }
+    }
+
+    companion object {
+        /** Max ids per PICS request during the library scan (safe server cap). */
+        private const val LIBRARY_BATCH = 100
+
+        /** Per-request cap so one dead PICS reply can't hang the whole scan. */
+        private const val LIBRARY_TIMEOUT_MS = 20_000L
     }
 }

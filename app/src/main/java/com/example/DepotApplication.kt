@@ -63,7 +63,7 @@ class DepotApplication : Application() {
             onSessionEstablished = { session -> prefs.saveSteamUsername(session.accountName) }
         )
 
-        steamRepository = SteamRepository(steamApi, database.steamGameDao())
+        steamRepository = SteamRepository(steamApi, database.steamGameDao(), steamRuntime)
         downloadManager = DepotDownloadManager(
             context = this,
             runtime = steamRuntime,
