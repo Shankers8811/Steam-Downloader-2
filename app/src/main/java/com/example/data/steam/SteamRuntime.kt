@@ -238,6 +238,7 @@ class SteamRuntime(private val context: Context) {
     private fun onLoggedOff(callback: LoggedOffCallback) {
         _loggedOn.value = false
         _licenses.value = emptyList()
+        licensedAppIdsCache = null
         log("Signed off from CM (${callback.result}).")
     }
 
@@ -362,31 +363,22 @@ class SteamRuntime(private val context: Context) {
         }
     }
 
-    /**
-     * Builds the complete owned-games inventory exactly the way the Steam
-     * client does: account licenses (CM) -> licensed packages -> app ids ->
-     * PICS metadata filtered to type == "Game".
-     *
-     * DLC / soundtracks / tools / dedicated servers are excluded at the
-     * source (their common.type is not "game"). Unlike
-     * IPlayerService/GetOwnedGames this also includes never-played free
-     * titles, i.e. NO silent missing games.
-     *
-     * @return (appId, displayName) pairs; empty when the CM license list
-     *         isn't populated yet (caller decides on a web-API fallback).
-     */
-    suspend fun buildOwnedGameLibrary(): List<Pair<Int, String>> = withContext(Dispatchers.IO) {
+    /** Cached set of every app id the account's licensed packages entitle it to. */
+    @Volatile
+    private var licensedAppIdsCache: Set<Int>? = null
+
+    suspend fun getLicensedAppIds(): Set<Int> = licensedAppIdsCache
+        ?: resolveLicensedAppIds().also { licensedAppIdsCache = it }
+
+    /** Phase-1 of the library scan, split out for DLC ownership checks. */
+    private suspend fun resolveLicensedAppIds(): Set<Int> = withContext(Dispatchers.IO) {
         val packageIds = _licenses.value.map { it.packageID }.distinct().sorted()
-        if (packageIds.isEmpty()) {
-            log("Native library build skipped — CM license list is empty.")
-            return@withContext emptyList()
-        }
+        if (packageIds.isEmpty()) return@withContext emptySet()
 
         val appsH = requireNotNull(client.getHandler(SteamApps::class.java)) {
             "SteamApps handler unavailable — SteamClient not initialized"
         }
 
-        // ---------- Phase 1: resolve every licensed package to its app ids.
         val grantedAppIds = sortedSetOf<Int>()
         packageIds.chunked(LIBRARY_BATCH).forEachIndexed { index, chunk ->
             val rs = try {
@@ -415,6 +407,34 @@ class SteamRuntime(private val context: Context) {
                 }
             }
         }
+        grantedAppIds
+    }
+
+    /**
+     * Builds the complete owned-games inventory exactly the way the Steam
+     * client does: account licenses (CM) -> licensed packages -> app ids ->
+     * PICS metadata filtered to type == "Game".
+     *
+     * DLC / soundtracks / tools / dedicated servers are excluded at the
+     * source (their common.type is not "game"). Unlike
+     * IPlayerService/GetOwnedGames this also includes never-played free
+     * titles, i.e. NO silent missing games.
+     *
+     * @return (appId, displayName) pairs; empty when the CM license list
+     *         isn't populated yet (caller decides on a web-API fallback).
+     */
+    suspend fun buildOwnedGameLibrary(): List<Pair<Int, String>> = withContext(Dispatchers.IO) {
+        if (_licenses.value.isEmpty()) {
+            log("Native library build skipped — CM license list is empty.")
+            return@withContext emptyList()
+        }
+
+        val appsH = requireNotNull(client.getHandler(SteamApps::class.java)) {
+            "SteamApps handler unavailable — SteamClient not initialized"
+        }
+
+        // ---------- Phase 1+2 (phase 1 shared with the DLC ownership cache).
+        val grantedAppIds = getLicensedAppIds().toSortedSet()
         if (grantedAppIds.isEmpty()) {
             log("Library: licenses resolved to zero apps.")
             return@withContext emptyList()
@@ -453,9 +473,84 @@ class SteamRuntime(private val context: Context) {
         }
         log(
             "Native library: ${owned.size} games from ${grantedAppIds.size} apps, " +
-                "${packageIds.size} licenses (DLC/tools excluded by type)."
+                "${_licenses.value.size} licenses (DLC/tools excluded by type)."
         )
         owned.entries.map { it.key to it.value }
+    }
+
+    data class DlcEntry(val appId: Int, val name: String, val owned: Boolean)
+
+    /**
+     * DLC list for a game with real display names and per-DLC ownership
+     * resolved from the account's licensed packages — the base for the
+     * "download each owned DLC whenever you want, one by one" details page.
+     */
+    suspend fun fetchGameDlcList(baseAppId: Int): List<DlcEntry> = withContext(Dispatchers.IO) {
+        val appsH = requireNotNull(client.getHandler(SteamApps::class.java)) {
+            "SteamApps handler unavailable — SteamClient not initialized"
+        }
+
+        val baseInfo = (try {
+            withTimeoutOrNull(LIBRARY_TIMEOUT_MS) {
+                appsH.picsGetProductInfo(
+                    apps = listOf(PICSRequest(id = baseAppId)),
+                    packages = emptyList()
+                ).await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("DLC: base-app PICS query failed ($baseAppId: ${e.message})")
+            null
+        } catch (t: Throwable) {
+            CrashLog.record("fetchGameDlcList base", t)
+            null
+        })?.results?.firstOrNull()?.apps?.get(baseAppId) ?: return@withContext emptyList()
+
+        val dlcIds = sortedSetOf<Int>()
+        baseInfo.keyValues["common"]["dlc"].children.forEach { child ->
+            child.name?.trim()?.toIntOrNull()?.takeIf { it > 0 }?.let { dlcIds += it }
+        }
+        baseInfo.keyValues["depots"]["dlc"].children.forEach { child ->
+            child.name?.trim()?.toIntOrNull()?.takeIf { it > 0 }?.let { dlcIds += it }
+        }
+        if (dlcIds.isEmpty()) return@withContext emptyList()
+
+        val licensed = try {
+            getLicensedAppIds()
+        } catch (e: Exception) {
+            CrashLog.record("fetchGameDlcList licensed ids", e)
+            emptySet()
+        }
+
+        val result = mutableListOf<DlcEntry>()
+        dlcIds.chunked(LIBRARY_BATCH).forEach { chunk ->
+            val rs = try {
+                withTimeoutOrNull(LIBRARY_TIMEOUT_MS) {
+                    appsH.picsGetProductInfo(
+                        apps = chunk.map { PICSRequest(id = it) },
+                        packages = emptyList()
+                    ).await()
+                }
+            } catch (e: Exception) {
+                log("DLC: batch query failed (${e.message})")
+                null
+            } catch (t: Throwable) {
+                CrashLog.record("fetchGameDlcList batch", t)
+                null
+            }
+            rs?.results?.forEach { info ->
+                info.apps.forEach { (dlcId, product) ->
+                    result += DlcEntry(
+                        appId = dlcId,
+                        name = product.keyValues["common"]["name"].value
+                            ?.takeIf { it.isNotBlank() } ?: "DLC $dlcId",
+                        owned = licensed.contains(dlcId)
+                    )
+                }
+            }
+        }
+        result.sortedWith(compareByDescending<DlcEntry> { it.owned }.thenBy { it.name.lowercase() })
     }
 
     private fun parseDepotPlan(        keyValues: KeyValue,

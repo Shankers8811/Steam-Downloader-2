@@ -41,6 +41,44 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    // ---------------- Game details (tile tap → base + owned-DLC page) ----------------
+
+    data class DlcUiState(
+        val baseAppId: Int,
+        val baseName: String,
+        val loading: Boolean = false,
+        val entries: List<com.example.data.steam.SteamRuntime.DlcEntry> = emptyList(),
+        val error: String? = null
+    )
+
+    private val _selectedGame = MutableStateFlow<SteamGameEntity?>(null)
+    val selectedGame: StateFlow<SteamGameEntity?> = _selectedGame.asStateFlow()
+
+    private val _dlcUi = MutableStateFlow<DlcUiState?>(null)
+    val dlcUi: StateFlow<DlcUiState?> = _dlcUi.asStateFlow()
+
+    fun openGameDetails(game: SteamGameEntity) {
+        if (_selectedGame.value?.appId == game.appId) return
+        _selectedGame.value = game
+        _dlcUi.value = DlcUiState(baseAppId = game.appId, baseName = game.name, loading = true)
+        viewModelScope.launch {
+            try {
+                val entries = services.steamRuntime.fetchGameDlcList(game.appId)
+                _dlcUi.value = DlcUiState(game.appId, game.name, loading = false, entries = entries)
+            } catch (e: Exception) {
+                _dlcUi.value = DlcUiState(game.appId, game.name, loading = false, error = e.message)
+            } catch (t: Throwable) {
+                com.example.CrashLog.record("openGameDetails", t)
+                _dlcUi.value = DlcUiState(game.appId, game.name, loading = false, error = t.javaClass.simpleName)
+            }
+        }
+    }
+
+    fun closeGameDetails() {
+        _selectedGame.value = null
+        _dlcUi.value = null
+    }
+
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 

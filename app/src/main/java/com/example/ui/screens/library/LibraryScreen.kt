@@ -1,6 +1,8 @@
 package com.example.ui.screens.library
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +57,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -96,6 +100,8 @@ fun LibraryScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
+    val selectedGame by viewModel.selectedGame.collectAsStateWithLifecycle()
+    val dlcUi by viewModel.dlcUi.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -347,9 +353,27 @@ fun LibraryScreen(
             items(filteredGames, key = { it.appId }) { game ->
                 GameCapsule(
                     game = game,
+                    onTap = { viewModel.openGameDetails(game) },
                     onGet = { onNavigateToDownloaderWithAppId(game.appId, game.name) }
                 )
             }
+        }
+
+        // Tile tap → full-screen details page (base download + owned DLC list).
+        selectedGame?.let { game ->
+            GameDetailsDialog(
+                game = game,
+                dlcUi = dlcUi,
+                onClose = { viewModel.closeGameDetails() },
+                onDownloadBase = {
+                    viewModel.closeGameDetails()
+                    onNavigateToDownloaderWithAppId(game.appId, game.name)
+                },
+                onDownloadDlc = { dlc ->
+                    viewModel.closeGameDetails()
+                    onNavigateToDownloaderWithAppId(dlc.appId, dlc.name)
+                }
+            )
         }
 
         SnackbarHost(
@@ -444,16 +468,210 @@ private fun StoreHeroCapsule(
     }
 }
 
+/**
+ * Tile-tap details page (full-screen dialog): hero art, base-game download
+ * button, and the owned-DLC list with one DOWNLOAD action per DLC — the
+ * "grab each DLC whenever you want, one by one" flow. Ownership comes from
+ * the account's CM licenses (not store pages), so only real entitlements
+ * show up as downloadable.
+ */
+@Composable
+private fun GameDetailsDialog(
+    game: SteamGameEntity,
+    dlcUi: LibraryViewModel.DlcUiState?,
+    onClose: () -> Unit,
+    onDownloadBase: () -> Unit,
+    onDownloadDlc: (com.example.data.steam.SteamRuntime.DlcEntry) -> Unit
+) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            color = SteamBg,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data("https://cdn.cloudflare.steamstatic.com/steam/apps/${game.appId}/library_hero.jpg")
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = game.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .background(SteamPanelHi)
+                        )
+                        IconButton(
+                            onClick = onClose,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(10.dp)
+                                .background(Color(0x99171A21), RoundedCornerShape(50))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Clear,
+                                contentDescription = "Close",
+                                tint = SteamText
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = game.name,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Black,
+                            color = SteamText
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${formatPlaytime(game.playtimeForever)}  ·  App ${game.appId}",
+                            fontSize = 12.sp,
+                            color = SteamTextDim
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = onDownloadBase,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SteamBuy,
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("details_download_base")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("DOWNLOAD BASE GAME", fontSize = 13.sp, fontWeight = FontWeight.Black)
+                        }
+
+                        Spacer(modifier = Modifier.height(22.dp))
+                        Text(
+                            text = "DLC — DOWNLOAD ONE BY ONE WHENEVER YOU WANT",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SteamAccent,
+                            letterSpacing = 1.5.sp
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        val state = dlcUi
+                        when {
+                            state == null || state.loading -> Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(20.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    color = SteamAccent,
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("Checking DLC on your account…", fontSize = 12.sp, color = SteamTextDim)
+                            }
+
+                            state.error != null -> Text(
+                                text = "Couldn't load DLC right now (${state.error}) — tap outside, then try again.",
+                                fontSize = 12.sp,
+                                color = SteamTextDim
+                            )
+
+                            state.entries.isEmpty() -> Text(
+                                text = "No DLC exists for this game.",
+                                fontSize = 12.sp,
+                                color = SteamTextDim
+                            )
+
+                            else -> state.entries.forEach { entry ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SteamPanel)
+                                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = entry.name,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (entry.owned) SteamText else SteamTextDim,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = if (entry.owned) "OWNED" else "Not on this account",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (entry.owned) SteamBuy else SteamTextDim,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                    if (entry.owned) {
+                                        Button(
+                                            onClick = { onDownloadDlc(entry) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = SteamPanelHi,
+                                                contentColor = SteamText
+                                            ),
+                                            shape = RoundedCornerShape(6.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp),
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .padding(start = 8.dp)
+                                                .testTag("get_dlc_${entry.appId}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Download,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("GET", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** A game capsule card like the Windows Steam client grid: poster + title + get. */
 @Composable
 private fun GameCapsule(
     game: SteamGameEntity,
+    onTap: () -> Unit,
     onGet: () -> Unit
 ) {
     Surface(
         color = SteamPanel,
         shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
     ) {
         Column {
             AsyncImage(
@@ -470,6 +688,7 @@ private fun GameCapsule(
                     .background(SteamPanelHi)
             )
             Column(modifier = Modifier.padding(10.dp)) {
+                // (tap anywhere on the card → details & DLC page)
                 Text(
                     text = game.name,
                     fontSize = 13.sp,
