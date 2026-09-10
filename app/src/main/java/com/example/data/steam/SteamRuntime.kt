@@ -239,6 +239,7 @@ class SteamRuntime(private val context: Context) {
         _loggedOn.value = false
         _licenses.value = emptyList()
         licensedAppIdsCache = null
+        ownedDlcByParentCache = null
         log("Signed off from CM (${callback.result}).")
     }
 
@@ -367,6 +368,16 @@ class SteamRuntime(private val context: Context) {
     @Volatile
     private var licensedAppIdsCache: Set<Int>? = null
 
+    /**
+     * Owned DLC grouped by their PARENT game app id, built during the library
+     * scan from every licensed app's PICS record (type == "dlc" + common.parent).
+     * This is account-truth ("the DLCs I actually own for this game") — unlike
+     * parsing the base game's common.dlc, which some games (e.g. Forza
+     * Horizon 5) leave empty, showing "No DLC exists" wrongly.
+     */
+    @Volatile
+    private var ownedDlcByParentCache: MutableMap<Int, MutableList<DlcEntry>>? = null
+
     suspend fun getLicensedAppIds(): Set<Int> = licensedAppIdsCache
         ?: resolveLicensedAppIds().also { licensedAppIdsCache = it }
 
@@ -442,6 +453,7 @@ class SteamRuntime(private val context: Context) {
 
         // ---------- Phase 2: PICS metadata per app, keep real games only.
         val owned = linkedMapOf<Int, String>()
+        val dlcByParent = mutableMapOf<Int, MutableList<DlcEntry>>()
         grantedAppIds.chunked(LIBRARY_BATCH).forEachIndexed { index, chunk ->
             val rs = try {
                 withTimeoutOrNull(LIBRARY_TIMEOUT_MS) {
@@ -463,14 +475,26 @@ class SteamRuntime(private val context: Context) {
                 info.apps.forEach { (appId, product) ->
                     val common = product.keyValues["common"]
                     val type = common["type"].value.orEmpty().lowercase()
-                    if (type == "game") {
-                        val name = common["name"].value?.takeIf { it.isNotBlank() }
-                            ?: "App $appId"
-                        owned[appId] = name
+                    when (type) {
+                        "game" -> {
+                            val name = common["name"].value?.takeIf { it.isNotBlank() }
+                                ?: "App $appId"
+                            owned[appId] = name
+                        }
+                        "dlc" -> {
+                            val parent = common["parent"].asInteger(0)
+                            if (parent > 0) {
+                                val name = common["name"].value?.takeIf { it.isNotBlank() }
+                                    ?: "DLC $appId"
+                                dlcByParent.getOrPut(parent) { mutableListOf() }
+                                    .add(DlcEntry(appId = appId, name = name, owned = true))
+                            }
+                        }
                     }
                 }
             }
         }
+        ownedDlcByParentCache = dlcByParent
         log(
             "Native library: ${owned.size} games from ${grantedAppIds.size} apps, " +
                 "${_licenses.value.size} licenses (DLC/tools excluded by type)."
@@ -514,7 +538,15 @@ class SteamRuntime(private val context: Context) {
         baseInfo.keyValues["depots"]["dlc"].children.forEach { child ->
             child.name?.trim()?.toIntOrNull()?.takeIf { it > 0 }?.let { dlcIds += it }
         }
-        if (dlcIds.isEmpty()) return@withContext emptyList()
+
+        // PRIMARY source — account-truth map built during the library scan
+        // (works even when the base app metadata hides its dlc list, e.g. FH5).
+        val ownedFromScan = ownedDlcByParentCache?.get(baseAppId).orEmpty()
+        val ownedIds = ownedFromScan.map { it.appId }.toSet()
+
+        if (dlcIds.isEmpty()) {
+            return@withContext ownedFromScan.sortedBy { it.name.lowercase() }
+        }
 
         val licensed = try {
             getLicensedAppIds()
@@ -541,6 +573,9 @@ class SteamRuntime(private val context: Context) {
             }
             rs?.results?.forEach { info ->
                 info.apps.forEach { (dlcId, product) ->
+                    // Skip when already credited as owned via the library scan —
+                    // avoids duplicate rows for the same DLC.
+                    if (ownedIds.contains(dlcId)) return@forEach
                     result += DlcEntry(
                         appId = dlcId,
                         name = product.keyValues["common"]["name"].value
@@ -550,7 +585,8 @@ class SteamRuntime(private val context: Context) {
                 }
             }
         }
-        result.sortedWith(compareByDescending<DlcEntry> { it.owned }.thenBy { it.name.lowercase() })
+        val merged = ownedFromScan + result
+        merged.sortedWith(compareByDescending<DlcEntry> { it.owned }.thenBy { it.name.lowercase() })
     }
 
     private fun parseDepotPlan(        keyValues: KeyValue,
