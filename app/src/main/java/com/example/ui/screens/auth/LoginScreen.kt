@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,6 +81,7 @@ fun LoginScreen(viewModel: AuthViewModel) {
 
     var username by rememberSaveable { mutableStateOf(viewModel.rememberedAccountName) }
     var password by rememberSaveable { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
     var rememberMe by rememberSaveable { mutableStateOf(true) }
     var guardCode by rememberSaveable { mutableStateOf("") }
 
@@ -230,13 +232,25 @@ fun LoginScreen(viewModel: AuthViewModel) {
                             onValueChange = { password = it },
                             label = "Password",
                             placeholder = "••••••••••••",
-                            visualTransformation = PasswordVisualTransformation(),
+                            visualTransformation =
+                                if (passwordVisible) VisualTransformation.None
+                                else PasswordVisualTransformation(),
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Filled.Lock,
                                     contentDescription = null,
                                     tint = androidx.compose.ui.graphics.Color(0xFF71717A)
                                 )
+                            },
+                            trailingIcon = {
+                                TextButton(onClick = { passwordVisible = !passwordVisible }) {
+                                    Text(
+                                        text = if (passwordVisible) "HIDE" else "SHOW",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = TextPrimaryLight
+                                    )
+                                }
                             }
                         )
 
