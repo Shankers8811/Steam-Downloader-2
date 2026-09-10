@@ -1,6 +1,7 @@
 package com.example.ui.screens.auth
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -98,25 +99,6 @@ fun LoginScreen(viewModel: AuthViewModel) {
             .fillMaxSize()
             .background(EditorialBackground)
     ) {
-        // 🐞 Diagnostics entry — always reachable, even before any sign-in.
-        // If the app ever misbehaves, this is how the exact reason is shared.
-        TextButton(
-            onClick = {
-                copiedToClipboard = false
-                showDiagnostics = true
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 12.dp, end = 8.dp)
-        ) {
-            Text(
-                text = "🐞 Report",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextSecondaryLight
-            )
-        }
-
         if (showDiagnostics) {
             AlertDialog(
                 onDismissRequest = { showDiagnostics = false },
@@ -295,13 +277,28 @@ fun LoginScreen(viewModel: AuthViewModel) {
                                 color = ErrorRed.copy(alpha = 0.10f),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text(
-                                    text = state.message,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ErrorRed,
-                                    modifier = Modifier.padding(12.dp)
-                                )
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = state.message,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ErrorRed
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "🐞 TAP HERE for the full error report (copy & share)",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = TextPrimaryLight,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                copiedToClipboard = false
+                                                showDiagnostics = true
+                                            }
+                                            .padding(vertical = 6.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -363,6 +360,32 @@ fun LoginScreen(viewModel: AuthViewModel) {
                 color = androidx.compose.ui.graphics.Color(0x44FFFFFF),
                 textAlign = TextAlign.Center
             )
+        }
+
+        // 🐞 Diagnostics — declared AFTER the scrollable Column inside the Box
+        // so it renders on TOP of it: placed inside the Column it would sit
+        // under the gesture layer and be untappable ("can't access report").
+        Surface(
+            color = TextSecondaryLight,
+            shape = RoundedCornerShape(50),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 14.dp, end = 14.dp)
+        ) {
+            TextButton(
+                onClick = {
+                    copiedToClipboard = false
+                    showDiagnostics = true
+                },
+                modifier = Modifier.testTag("diagnostics_button")
+            ) {
+                Text(
+                    text = "🐞 REPORT",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Black,
+                    color = androidx.compose.ui.graphics.Color(0xFF09090B)
+                )
+            }
         }
     }
 }
