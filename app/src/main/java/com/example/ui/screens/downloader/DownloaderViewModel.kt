@@ -6,12 +6,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.DepotApplication
+import com.example.data.auth.AuthState
 import com.example.data.db.DownloadTaskEntity
 import com.example.data.download.DownloadRequest
 import com.example.data.download.DownloadSessionState
 import com.example.data.download.SessionPhase
 import com.example.data.model.DlcMode
 import com.example.service.DownloadForegroundService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -83,6 +85,42 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
                 sessionStatePhaseTracker = state.phase
                 if (previous == state.phase && state.progressPercent < 100f) return@collect
                 upsertHistoryTask(state)
+            }
+        }
+
+        // Steam-style durability: pick up a checkpointed session from disk the
+        // moment the ViewModel is created (survives app exit / power-off), then
+        // continue it automatically when the user did NOT explicitly pause —
+        // exactly like Steam on Windows after a restart.
+        viewModelScope.launch {
+            val restored = manager.restorePersistedSession() ?: return@launch
+            _appIdInput.value = restored.appId.toString()
+            _appNameInput.value = restored.appName
+            _branchInput.value = restored.branch.ifBlank { "public" }
+            _depotIdsInput.value = restored.depotIds
+            _dlcMode.value = restored.dlcMode
+            if (manager.restoredPausedExplicitly) {
+                _statusNotification.value =
+                    "Paused download restored: \"${restored.appName}\" — RESUME continues from the exact checkpoint."
+                return@launch
+            }
+            val deadline = System.currentTimeMillis() + 30_000L
+            while (authManager.authState.value !is AuthState.LoggedIn &&
+                System.currentTimeMillis() < deadline
+            ) {
+                delay(400)
+            }
+            if (authManager.authState.value is AuthState.LoggedIn &&
+                manager.restoredRequest != null &&
+                !sessionState.value.isEngineActive
+            ) {
+                _statusNotification.value =
+                    "Continuing \"${restored.appName}\" from its checkpoint — Steam-style resume."
+                manager.resume { authManager.getValidAccessToken() }
+                startForegroundServiceSafely()
+            } else {
+                _statusNotification.value =
+                    "\"${restored.appName}\" is checkpointed — sign in and hit RESUME to continue."
             }
         }
     }

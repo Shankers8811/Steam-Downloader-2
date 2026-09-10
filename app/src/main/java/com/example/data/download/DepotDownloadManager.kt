@@ -70,6 +70,10 @@ class DepotDownloadManager(
     @Volatile
     private var activeDownloader: DepotDownloader? = null
 
+    /** Install dir of the live engine — lets control methods flip the marker. */
+    @Volatile
+    private var activeInstallDir: File? = null
+
     @Volatile
     private var lastRequest: DownloadRequest? = null
 
@@ -134,17 +138,39 @@ class DepotDownloadManager(
             controlSignal = ControlSignal.PAUSE
             log(LogLevel.INFO, "Pause requested — stopping the engine; progress so far is kept…")
         }
-        // Close the downloader's internal scope so pause is immediate even if
-        // a CDN read is stalled, then cancel the engine job.
+        // Persist the choice: an explicit pause MUST survive an app exit /
+        // device power-off and stay paused afterwards (Steam semantics).
+        lastRequest?.let { req -> activeInstallDir?.let { dir -> writeSessionMarker(dir, req, pausedExplicitly = true) } }
         runCatching { activeDownloader?.close() }
         engineJob?.cancel()
     }
 
     /** Cancels the session. Staging stays on disk so it can be resumed later. */
     fun cancel() {
+        if (engineJob?.isActive != true) {
+            // Cold-state cancel: no live engine (e.g. a session restored from
+            // disk into PAUSED). Flip the UI to CANCELLED; staging stays.
+            if (_state.value.phase == SessionPhase.PAUSED) {
+                controlSignal = ControlSignal.NONE
+                lastRequest?.let { req ->
+                    (installDirForAppId(req.appId) ?: resolveInstallDirFor(req))
+                        .let { dir -> writeSessionMarker(dir, req, pausedExplicitly = true) }
+                }
+                update {
+                    it.copy(
+                        phase = SessionPhase.CANCELLED,
+                        statusMessage = "Cancelled. Partial content stays in staging and can be resumed."
+                    )
+                }
+            }
+            return
+        }
         if (controlSignal == ControlSignal.NONE) {
             controlSignal = ControlSignal.CANCEL
         }
+        // Persist the stop so an exit/reboot treats this as an explicit stop,
+        // not as a crash to auto-continue.
+        lastRequest?.let { req -> activeInstallDir?.let { dir -> writeSessionMarker(dir, req, pausedExplicitly = true) } }
         // Instant abort: close the downloader's internal scope (kills socket
         // reads), then cancel our engine job. Staging/ledger stay on disk so
         // a later resume is still possible — "emergency stop", not "delete".
@@ -161,8 +187,205 @@ class DepotDownloadManager(
         val map = installsMap().toMutableMap()
         map.remove(appId)
         saveInstallsMap(map)
-        update { it.copy(hasResumableSession = false) }
+        // The marker lived inside the staging dir, so it is gone too.
+        if (engineJob?.isActive != true) {
+            // Nothing left to resume: cold session returns to IDLE cleanly.
+            if (restoredRequest?.appId == appId) restoredRequest = null
+            if (lastRequest?.appId == appId) lastRequest = null
+            _state.value = DownloadSessionState()
+        } else {
+            update { it.copy(hasResumableSession = false) }
+        }
         log(LogLevel.INFO, "Staging for app $appId cleared (${formatBytes(stagedBytes)}).")
+    }
+
+    // ------------------------------------------------------------------
+    // Persistent sessions — Steam-style pause / power-off resume
+    // ------------------------------------------------------------------
+
+    /**
+     * Snapshot of one download session, stored at
+     * "<installDir>/.DepotDownloader/session.json". It is what makes pause,
+     * app exit and device power-off harmless: the full request plus the
+     * explicit-pause flag are recoverable from disk any time.
+     */
+    private data class SessionRecord(
+        val appId: Int,
+        val appName: String,
+        val branch: String,
+        val dlcModeName: String,
+        val depotIds: String,
+        val dlcDepotId: String,
+        val pausedExplicitly: Boolean,
+        val updatedAtMs: Long
+    ) {
+        fun toRequest(): DownloadRequest = DownloadRequest(
+            appId = appId,
+            appName = appName,
+            branch = branch,
+            dlcMode = runCatching { DlcMode.valueOf(dlcModeName) }
+                .getOrDefault(DlcMode.BASE_AND_DLC),
+            depotIds = depotIds,
+            dlcDepotId = dlcDepotId
+        )
+    }
+
+    /** Session restored from disk, ready for [resume] (null when none). */
+    @Volatile
+    var restoredRequest: DownloadRequest? = null
+        private set
+
+    /** True when the restored session was explicitly paused by the user. */
+    @Volatile
+    var restoredPausedExplicitly: Boolean = true
+        private set
+
+    /**
+     * Scans every library root for session markers and restores the most
+     * recent one into a PAUSED state — the Downloader tab then shows RESUME /
+     * CANCEL exactly like Steam after a restart. A game folder that was
+     * MOVED to another root (e.g. the SD card) while paused is recognised by
+     * its marker and adopted at the new location. Returns the restored
+     * request, or null when there is nothing to restore / engine is busy.
+     */
+    fun restorePersistedSession(): DownloadRequest? {
+        if (engineJob?.isActive == true || _state.value.isEngineActive) return null
+        val (record, dir) = findPersistedSession() ?: return null
+        val request = record.toRequest()
+        if (request.appId == 0) return null
+        restoredRequest = request
+        restoredPausedExplicitly = record.pausedExplicitly
+        lastRequest = request
+        rememberInstall(request.appId, dir.absolutePath)
+        _state.value = DownloadSessionState(
+            phase = SessionPhase.PAUSED,
+            appId = request.appId,
+            appName = request.appName,
+            branch = request.branch.ifBlank { "public" },
+            outputDisplay = dir.absolutePath,
+            hasResumableSession = true,
+            statusMessage = if (record.pausedExplicitly) {
+                "Paused session restored — every chunk-checkpoint survived; resume any time."
+            } else {
+                "Resumable session restored — it can continue from its checkpoint."
+            },
+            logLines = emptyList()
+        )
+        log(
+            LogLevel.INFO,
+            "Restored resumable session for \"${request.appName}\" (app ${request.appId}) at ${dir.absolutePath} (explicit pause: ${record.pausedExplicitly})."
+        )
+        return request
+    }
+
+    /** All on-disk library roots: internal + every external app dir (SD card). */
+    private fun libraryRoots(): List<File> = buildList {
+        add(context.getExternalFilesDir(null) ?: context.filesDir)
+        context.getExternalFilesDirs(null)?.forEach { if (it != null) add(it) }
+        add(context.filesDir)
+    }.map { it.absolutePath }.distinct().map(::File)
+
+    private fun steamappsCommonOf(root: File): File =
+        File(File(File(root, "SteamLibrary"), "steamapps"), "common")
+
+    /**
+     * Relocation-aware install-dir resolution: if the game's folder (with
+     * non-empty staging) is found under ANY library root, that location wins
+     * — this is how a moved folder resumes instead of re-downloading.
+     */
+    private fun resolveInstallDirFor(request: DownloadRequest): File {
+        for (root in libraryRoots()) {
+            val dir = File(steamappsCommonOf(root), sanitizeFolderName(request.appName))
+            val staging = File(dir, STAGING_DIR_NAME)
+            if (staging.isDirectory && staging.listFiles()?.isNotEmpty() == true) return dir
+        }
+        return installDirFor(request.appName)
+    }
+
+    private fun sessionMarkerOf(installDir: File): File =
+        File(File(installDir, STAGING_DIR_NAME), SESSION_FILE)
+
+    private fun writeSessionMarker(installDir: File, request: DownloadRequest, pausedExplicitly: Boolean) {
+        val staging = File(installDir, STAGING_DIR_NAME)
+        runCatching { staging.mkdirs() }
+        val json = org.json.JSONObject()
+            .put("appId", request.appId)
+            .put("appName", request.appName)
+            .put("branch", request.branch)
+            .put("dlcMode", request.dlcMode.name)
+            .put("depotIds", request.depotIds)
+            .put("dlcDepotId", request.dlcDepotId)
+            .put("pausedExplicitly", pausedExplicitly)
+            .put("installDir", installDir.absolutePath)
+            .put("updatedAtMs", System.currentTimeMillis())
+        val out = File(staging, SESSION_FILE)
+        val tmp = File(staging, "$SESSION_FILE.tmp")
+        runCatching {
+            tmp.writeText(json.toString())
+            if (!tmp.renameTo(out)) {
+                runCatching { tmp.copyTo(out, overwrite = true) }
+                tmp.delete()
+            }
+        }
+    }
+
+    private fun deleteSessionMarker(installDir: File) {
+        runCatching { sessionMarkerOf(installDir).delete() }
+    }
+
+    private fun readSessionMarker(marker: File): SessionRecord? = runCatching {
+        val j = org.json.JSONObject(marker.readText())
+        SessionRecord(
+            appId = j.optInt("appId", 0),
+            appName = j.optString("appName", ""),
+            branch = j.optString("branch", "public"),
+            dlcModeName = j.optString("dlcMode", DlcMode.BASE_AND_DLC.name),
+            depotIds = j.optString("depotIds", ""),
+            dlcDepotId = j.optString("dlcDepotId", ""),
+            pausedExplicitly = j.optBoolean("pausedExplicitly", false),
+            updatedAtMs = j.optLong("updatedAtMs", marker.lastModified())
+        )
+    }.getOrNull()
+
+    /** Newest resumable session found on ANY library root (marker or legacy). */
+    private fun findPersistedSession(): Pair<SessionRecord, File>? {
+        val installs = installsMap()
+        val candidates = mutableListOf<Pair<SessionRecord, File>>()
+        for (root in libraryRoots()) {
+            val games = steamappsCommonOf(root).listFiles() ?: continue
+            for (dir in games) {
+                if (!dir.isDirectory) continue
+                val staging = File(dir, STAGING_DIR_NAME)
+                if (!staging.isDirectory || staging.listFiles()?.isNotEmpty() != true) continue
+                val record = readSessionMarker(sessionMarkerOf(dir))
+                    ?: legacyRecordFor(dir, installs)
+                if (record != null) candidates += record to dir
+            }
+        }
+        return candidates.maxByOrNull { it.first.updatedAtMs }
+    }
+
+    /**
+     * Recovery for staging written by older builds (no session.json): rebuild
+     * the request from the installs map. Never auto-continues — provenance
+     * unknown, so explicit RESUME is required.
+     */
+    private fun legacyRecordFor(dir: File, installs: Map<Int, String>): SessionRecord? {
+        val staging = File(dir, STAGING_DIR_NAME)
+        if (staging.listFiles()?.isNotEmpty() != true) return null
+        val appId = installs.entries.firstOrNull { it.value == dir.absolutePath }?.key
+            ?: return null
+        val mtime = staging.listFiles()?.maxOfOrNull { it.lastModified() } ?: 0L
+        return SessionRecord(
+            appId = appId,
+            appName = dir.name,
+            branch = "public",
+            dlcModeName = DlcMode.BASE_AND_DLC.name,
+            depotIds = "",
+            dlcDepotId = "",
+            pausedExplicitly = true,
+            updatedAtMs = mtime
+        )
     }
 
     // ------------------------------------------------------------------
@@ -253,8 +476,13 @@ class DepotDownloadManager(
             val totalUncompressed = selected.sumOf { it.sizeBytes }
             counters.totalCompressed = totalCompressed
 
-            val installDir = installDirFor(request.appName)
+            val installDir = resolveInstallDirFor(request)
+            activeInstallDir = installDir
             rememberInstall(request.appId, installDir.absolutePath)
+            // Steam-style durability: record this session to disk. A marker
+            // with pausedExplicitly=false means "engine was running" — the app
+            // auto-continues it after exit/power-off, exactly like Steam.
+            writeSessionMarker(installDir, request, pausedExplicitly = false)
 
             val stagedDir = File(installDir, STAGING_DIR_NAME)
             val resumeAvailable = stagedDir.listFiles()?.isNotEmpty() == true
@@ -416,6 +644,7 @@ class DepotDownloadManager(
                             statusMessage = "Paused at a chunk boundary — resume any time; completed files are whole."
                         )
                     }
+                    writeSessionMarker(installDir, request, pausedExplicitly = true)
                     log(LogLevel.INFO, "Paused. Staging keeps ${formatBytes(counters.compressedTotal)} of verified content; resume re-verifies instead of restarting.")
                 }
                 controlSignal == ControlSignal.CANCEL -> {
@@ -428,6 +657,7 @@ class DepotDownloadManager(
                             statusMessage = "Cancelled. Partial content stays in staging and can be resumed."
                         )
                     }
+                    writeSessionMarker(installDir, request, pausedExplicitly = true)
                     log(LogLevel.WARN, "Download cancelled by user.")
                 }
                 failedErrors.isNotEmpty() -> {
@@ -456,6 +686,9 @@ class DepotDownloadManager(
                             statusMessage = "Completed — everything downloaded & verified, safe to move."
                         )
                     }
+                    // Done for good — no session to restore next launch.
+                    deleteSessionMarker(installDir)
+                    activeInstallDir = null
                     log(LogLevel.OK, "\"${request.appName}\" fully installed to ${installDir.absolutePath} — files are verified and safe to move to your PC.")
                 }
             }
@@ -491,6 +724,7 @@ class DepotDownloadManager(
             }
         } finally {
             activeDownloader = null
+            activeInstallDir = null
         }
     }
 
@@ -593,7 +827,7 @@ class DepotDownloadManager(
             .build()
 
     private fun resetStateFor(request: DownloadRequest, isResume: Boolean) {
-        val installDir = installDirFor(request.appName)
+        val installDir = resolveInstallDirFor(request)
         _state.value = DownloadSessionState(
             phase = SessionPhase.VALIDATING_LICENSE,
             appId = request.appId,
@@ -734,6 +968,7 @@ class DepotDownloadManager(
 
     companion object {
         private const val STAGING_DIR_NAME = ".DepotDownloader"
+        private const val SESSION_FILE = "session.json"
         private const val INSTALLS_FILE = "installs.json"
         private const val MAX_LOG_LINES = 250
         private const val MAX_RECENT_FILES = 8

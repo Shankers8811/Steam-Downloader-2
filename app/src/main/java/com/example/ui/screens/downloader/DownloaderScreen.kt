@@ -490,7 +490,11 @@ fun DownloaderScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        "Clear staged partial data (${FormatUtils.formatBytes(state.downloadedBytes)})",
+                        if (state.downloadedBytes > 0L) {
+                            "Clear staged partial data (${FormatUtils.formatBytes(state.downloadedBytes)})"
+                        } else {
+                            "Clear staged partial data"
+                        },
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextSecondaryDark
