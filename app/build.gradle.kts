@@ -133,6 +133,15 @@ dependencies {
   // (ProtocolMessageEnum) must also exist at COMPILE time. Version pinned to
   // javasteam 1.8.0's own dependency.
   implementation("com.google.protobuf:protobuf-java:4.31.1")
+  // Two more runtime-only classes the published javasteam pom does NOT bring
+  // along — caught on-device by the deep class check on the Nova 7i:
+  //   CryptoHelper.<clinit> does Class.forName("org.bouncycastle…BouncyCastleProvider")
+  //   -> ExceptionInInitializerError on EVERY sign-in attempt (the actual bug).
+  //   okio (KMP facade) never lands in the dex merge -> okhttp breaks at its
+  //   first HTTPS call (would have been the very next crash).
+  // Versions match javasteam 1.8.0's own version catalog.
+  implementation("org.bouncycastle:bcprov-jdk18on:1.83")
+  implementation("com.squareup.okio:okio-jvm:3.16.0")
   implementation(libs.com.github.luben.zstd.jni) { artifact { type = "aar" } }
   implementation(libs.org.tukaani.xz)
   implementation(libs.kotlinx.coroutines.jdk8)

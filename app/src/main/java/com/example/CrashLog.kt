@@ -140,6 +140,7 @@ object CrashLog {
             "in.dragonbra.javasteam.util.crypto.CryptoHelper",
             "in.dragonbra.javasteam.steam.handlers.steamunifiedmessages.SteamUnifiedMessages",
             "in.dragonbra.javasteam.networking.steam3.WebSocketConnection",
+            "org.bouncycastle.jce.provider.BouncyCastleProvider",
             "com.google.protobuf.ExtensionRegistryLite",
             "io.ktor.client.HttpClient",
             "io.ktor.client.engine.cio.CIO",
