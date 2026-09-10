@@ -43,6 +43,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,13 +121,23 @@ fun LibraryScreen(
         }
     }
 
+    // Store-style tabs: ALL / PLAYED / NEVER PLAYED (owned games only).
+    var libraryFilter by remember { mutableStateOf(0) }
+    val filteredGames = remember(sortedGames, libraryFilter) {
+        when (libraryFilter) {
+            1 -> sortedGames.filter { it.playtimeForever > 0 }
+            2 -> sortedGames.filter { it.playtimeForever <= 0 }
+            else -> sortedGames
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(SteamBg)
     ) {
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 175.dp),
+            columns = GridCells.Adaptive(minSize = 112.dp),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -211,6 +223,31 @@ fun LibraryScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    // -------- Store tabs: ALL / PLAYED / NEVER PLAYED --------
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("ALL GAMES" to 0, "PLAYED" to 1, "NEVER PLAYED" to 2)
+                            .forEach { (label, code) ->
+                                FilterChip(
+                                    selected = libraryFilter == code,
+                                    onClick = { libraryFilter = code },
+                                    label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        containerColor = SteamPanel,
+                                        labelColor = SteamTextDim,
+                                        selectedContainerColor = SteamAccent,
+                                        selectedLabelColor = SteamBg
+                                    ),
+                                    border = null,
+                                    modifier = Modifier.testTag("tab_$code")
+                                )
+                            }
+                    }
+
                     // -------- Sort chips --------
                     Row(
                         modifier = Modifier
@@ -269,8 +306,18 @@ fun LibraryScreen(
                 }
             }
 
+            // ---------------- Featured hero (store-style, most played) ----------------
+            if (!isLoading && searchQuery.isBlank() && filteredGames.isNotEmpty()) {
+                val hero = filteredGames.maxByOrNull { it.playtimeForever } ?: filteredGames.first()
+                item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
+                    StoreHeroCapsule(game = hero, onGet = {
+                        onNavigateToDownloaderWithAppId(hero.appId, hero.name)
+                    })
+                }
+            }
+
             // ---------------- Games ----------------
-            if (!isLoading && sortedGames.isEmpty()) {
+            if (!isLoading && filteredGames.isEmpty()) {
                 item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                     Column(
                         modifier = Modifier
@@ -297,7 +344,7 @@ fun LibraryScreen(
                 }
             }
 
-            items(sortedGames, key = { it.appId }) { game ->
+            items(filteredGames, key = { it.appId }) { game ->
                 GameCapsule(
                     game = game,
                     onGet = { onNavigateToDownloaderWithAppId(game.appId, game.name) }
@@ -312,7 +359,92 @@ fun LibraryScreen(
     }
 }
 
-/** A game capsule card like the Steam client grid: header art + title + get. */
+/** Store-window style featured hero: wide art, gradient, big title + CTA. */
+@Composable
+private fun StoreHeroCapsule(
+    game: SteamGameEntity,
+    onGet: () -> Unit
+) {
+    Surface(
+        color = SteamPanel,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 4.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(game.imgHeaderUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = game.name,
+                contentScale = ContentScale.Crop,
+                alignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(600f / 380f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SteamPanelHi)
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .background(Color(0xB3171A21))
+                    .padding(14.dp)
+            ) {
+                Text(
+                    text = "FEATURED FROM YOUR LIBRARY",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SteamAccent,
+                    letterSpacing = 1.6.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = game.name,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    color = SteamText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = formatPlaytime(game.playtimeForever),
+                        fontSize = 11.sp,
+                        color = SteamTextDim
+                    )
+                    Button(
+                        onClick = onGet,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SteamBuy,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("DOWNLOAD", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A game capsule card like the Windows Steam client grid: poster + title + get. */
 @Composable
 private fun GameCapsule(
     game: SteamGameEntity,
@@ -333,7 +465,7 @@ private fun GameCapsule(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(460f / 215f)
+                    .aspectRatio(600f / 900f)
                     .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
                     .background(SteamPanelHi)
             )

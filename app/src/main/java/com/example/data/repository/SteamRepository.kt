@@ -52,7 +52,8 @@ class SteamRepository(
                     name = name,
                     playtimeForever = playtimeByApp[appId] ?: 0,
                     imgIconUrl = iconByApp[appId] ?: "",
-                    imgHeaderUrl = "https://cdn.cloudflare.steamstatic.com/steam/apps/$appId/header.jpg",
+                    // Windows Steam client library art: tall 2:3 poster capsule.
+                    imgHeaderUrl = "https://cdn.cloudflare.steamstatic.com/steam/apps/$appId/library_600x900.jpg",
                     lastUpdated = System.currentTimeMillis()
                 )
             }
