@@ -146,7 +146,7 @@ object CrashLog {
             "io.ktor.client.engine.cio.CIO",
             "io.ktor.client.plugins.websocket.WebSockets",
             "okhttp3.OkHttpClient",
-            "com.squareup.okio.Buffer",
+            "okio.Buffer",  // okio 3.x KMP packages (com.squareup.okio.* is obsolete okio 1/2.x)
             "kotlinx.serialization.json.Json",
             "org.apache.commons.lang3.StringUtils"
         )
