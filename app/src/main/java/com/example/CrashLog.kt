@@ -141,6 +141,10 @@ object CrashLog {
             "in.dragonbra.javasteam.steam.handlers.steamunifiedmessages.SteamUnifiedMessages",
             "in.dragonbra.javasteam.networking.steam3.WebSocketConnection",
             "org.bouncycastle.jce.provider.BouncyCastleProvider",
+            // The class that must exist so CryptoHelper picks SEC_PROV="SC"
+            // (full SpongyCastle) over Android's crippled bootclasspath "BC"
+            // shim — without it ALL manifest downloads die on SHA-1 (Android P+).
+            "org.spongycastle.jce.provider.BouncyCastleProvider",
             "com.google.protobuf.ExtensionRegistryLite",
             "io.ktor.client.HttpClient",
             "io.ktor.client.engine.cio.CIO",

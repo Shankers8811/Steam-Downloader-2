@@ -141,6 +141,18 @@ dependencies {
   //   first HTTPS call (would have been the very next crash).
   // Versions match javasteam 1.8.0's own version catalog.
   implementation("org.bouncycastle:bcprov-jdk18on:1.83")
+  // Android crypto trap (user-verified on device): CryptoHelper's <clinit> tries
+  //   (1) Class.forName("org.spongycastle…BouncyCastleProvider") -> SEC_PROV="SC"
+  //   (2) else Class.forName("org.bouncycastle…BouncyCastleProvider") -> SEC_PROV="BC"
+  // On Android P+, branch (2) loads android's BOOTCLASSPATH SHIM class (same
+  // fully-qualified name always shadows our packaged bcprov jar) whose
+  // MessageDigest.SHA-1 was deliberately removed — DepotManifest then dies
+  // with "The BC provider no longer provides an implementation for
+  // MessageDigest.SHA-1" on the very first manifest (blocks ALL downloads).
+  // Shipping SpongyCastle makes branch (1) succeed: full SHA-1/AES/RSA from a
+  // package name the bootclasspath cannot intercept.
+  implementation("com.madgag.spongycastle:core:1.58.0.0")
+  implementation("com.madgag.spongycastle:prov:1.58.0.0")
   implementation("com.squareup.okio:okio-jvm:3.16.0")
   implementation(libs.com.github.luben.zstd.jni) { artifact { type = "aar" } }
   implementation(libs.org.tukaani.xz)

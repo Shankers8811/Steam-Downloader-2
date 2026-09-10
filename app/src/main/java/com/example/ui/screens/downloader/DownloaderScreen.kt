@@ -717,7 +717,7 @@ fun DownloaderScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "DLC CONTENT",
                             fontSize = 10.sp,
@@ -769,7 +769,10 @@ fun DownloaderScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Folder,
                                 contentDescription = null,
@@ -781,7 +784,9 @@ fun DownloaderScreen(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 color = Color.White,
-                                letterSpacing = 1.2.sp
+                                letterSpacing = 1.2.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                         }
                         Text(
