@@ -887,90 +887,58 @@ class DepotDownloadManager(
             val steamappsDir = installDir.parentFile?.parentFile ?: return@runCatching
             val acf = File(steamappsDir, "appmanifest_${request.appId}.acf")
             val unix = System.currentTimeMillis() / 1000L
-            val safeName = request.appName.replace(""", "'")
-            acf.writeText(
-                buildString {
-                    append(""AppState"
+            val safeName = request.appName.replace('"', '\'')
+            val acfText = """"AppState"
 {
-")
-                    append("	"appid"		"${request.appId}"
-")
-                    append("	"Universe"		"1"
-")
-                    append("	"name"		"$safeName"
-")
-                    append("	"StateFlags"		"4"
-")
-                    append("	"installdir"		"${installDir.name}"
-")
-                    append("	"LastUpdated"		"$unix"
-")
-                    append("	"UpdateResult"		"0"
-")
-                    append("	"SizeOnDisk"		"${movedBytes + localBytes}"
-")
-                    append("	"BuildID"		"0"
-")
-                    append("	"LastOwner"		"0"
-")
-                    append("	"BytesToDownload"		"0"
-")
-                    append("	"BytesDownloaded"		"0"
-")
-                    append("	"AutoUpdateBehavior"		"0"
-")
-                    append("	"AllowOtherDownloadsWhileRunning"		"0"
-")
-                    append("	"ScheduledAutoUpdate"		"0"
-")
-                    append("	"UserConfig"
+	"appid"		"${request.appId}"
+	"Universe"		"1"
+	"name"		"$safeName"
+	"StateFlags"		"4"
+	"installdir"		"${installDir.name}"
+	"LastUpdated"		"$unix"
+	"UpdateResult"		"0"
+	"SizeOnDisk"		"${movedBytes + localBytes}"
+	"BuildID"		"0"
+	"LastOwner"		"0"
+	"BytesToDownload"		"0"
+	"BytesDownloaded"		"0"
+	"AutoUpdateBehavior"		"0"
+	"AllowOtherDownloadsWhileRunning"		"0"
+	"ScheduledAutoUpdate"		"0"
+	"UserConfig"
 	{
 		"language"		"english"
 	}
-")
-                    append("}
-")
-                }
-            )
+}
+"""
+            acf.writeText(acfText)
             val remainingHint = if (movedIds.isNotEmpty()) {
-                "
-This is a LATER batch — the first batch(es) (${movedIds.size} depot(s), ${formatBytes(movedBytes)}) are already on your PC. Copy this batch INTO the same folder in step 2 (files do not overlap; choose "Skip" if Windows asks about replacing) and replace appmanifest_${request.appId}.acf with this newest copy.
-"
+                "\nThis is a LATER batch - the first batch(es) (${movedIds.size} depot(s), " +
+                    "${formatBytes(movedBytes)}) are already on your PC. Copy this batch INTO " +
+                    "the same folder in step 2 (files do not overlap; choose \"Skip\" if Windows " +
+                    "asks about replacing) and replace appmanifest_${request.appId}.acf with " +
+                    "this newest copy.\n"
             } else ""
-            File(installDir, "TRANSFER_README_PC.txt").writeText(
-                "PC TRANSFER — ${request.appName} (app ${request.appId})
-" +
-                    "===================================================
+            val readmeText = """PC TRANSFER - ${request.appName} (app ${request.appId})
+===================================================
 
-" +
-                    "1. On your PC open your Steam library folder, e.g.
-" +
-                    "   C:\Program Files (x86)\Steam\steamapps\
+1. On your PC open your Steam library folder, e.g.
+   C:\Program Files (x86)\Steam\steamapps\
 
-" +
-                    "2. Copy this folder ("${installDir.name}") into:
-" +
-                    "   steamapps\common\  so the final path is
-" +
-                    "   steamapps\common\${installDir.name}\
+2. Copy this folder ("${installDir.name}") into:
+   steamapps\common\  so the final path is
+   steamapps\common\${installDir.name}\
 
-" +
-                    "3. Copy the file "appmanifest_${request.appId}.acf" — it sits one level
-" +
-                    "   ABOVE this folder (in steamapps\) — into the PC's steamapps\ folder,
-" +
-                    "   right next to the "common" folder.
-" + remainingHint + "
-" +
-                    "4. Fully close Steam (system tray icon -> Exit), then start it again.
-" +
-                    "   Steam finds the existing files, runs a validation scan
-" +
-                    "   ("Discovering existing files") and then the game is ready to PLAY.
-" +
-                    "   If a batch is still missing, Steam downloads just that part.
-"
-            )
+3. Copy the file "appmanifest_${request.appId}.acf" - it sits one level
+   ABOVE this folder (in steamapps\) - into the PC's steamapps\ folder,
+   right next to the "common" folder.
+""" + remainingHint + """
+4. Fully close Steam (system tray icon -> Exit), then start it again.
+   Steam finds the existing files, runs a validation scan
+   ("Discovering existing files") and then the game is ready to PLAY.
+   If a batch is still missing, Steam downloads just that part.
+"""
+            File(installDir, "TRANSFER_README_PC.txt").writeText(readmeText)
             log(LogLevel.OK, "PC transfer files written: appmanifest_${request.appId}.acf + TRANSFER_README_PC.txt")
         }
     }
