@@ -980,8 +980,9 @@ class DepotDownloadManager(
             remainingBytes = remainingBytes,
             freeBytes = free,
             lastBatchDepots = lastBatch,
-            canMarkMoved = st.phase == SessionPhase.COMPLETED && st.appId == appId &&
-                lastBatch.isNotEmpty()
+            canMarkMoved = st.appId == appId &&
+                (st.phase == SessionPhase.COMPLETED || st.phase == SessionPhase.PAUSED) &&
+                st.depots.any { it.completed }
         )
     }
 
@@ -1013,36 +1014,56 @@ class DepotDownloadManager(
     }
 
     /**
-     * After the user copied the just-completed batch to the PC: record its
-     * depots as moved and delete the local copy so the phone has room for
-     * the next batch. Only valid right after COMPLETED.
+     * After the user copied the transferred-so-far files to the PC: record
+     * every depot that finished 100% as MOVED and delete the local copy, so
+     * the phone has room for the balance. Works right after COMPLETED and
+     * from PAUSED (pause anywhere -> copy to PC -> tap this): only depots
+     * marked fully complete count as moved; any in-flight depot restarts
+     * from scratch next run — clean and corruption-free.
      */
     fun markBatchMovedAndPurge(): Boolean {
         val st = _state.value
-        if (engineJob?.isActive == true || st.phase != SessionPhase.COMPLETED) return false
+        val phaseOk = st.phase == SessionPhase.COMPLETED || st.phase == SessionPhase.PAUSED
+        if (engineJob?.isActive == true || !phaseOk) return false
         val appId = st.appId
         val rec = batchRecordOf(appId) ?: return false
-        val lastArr = rec.optJSONArray("lastBatchDepots") ?: return false
+        val doneRows = st.depots.filter { it.completed }.map { it.depotId }
+        if (doneRows.isEmpty()) return false
         val dir = installDirForAppId(appId) ?: return false
 
+        // Bytes per completed depot from the persisted plan snapshot.
+        val planBytes = mutableMapOf<Int, Long>()
+        rec.optJSONArray("plan")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONObject(i) ?: continue
+                planBytes[p.optInt("depotId")] = p.optLong("sizeBytes", 0L)
+            }
+        }
+
         val movedNow = rec.optStringSet("movedDepotIds").toMutableSet()
-        for (i in 0 until lastArr.length()) movedNow += lastArr.optInt(i)
+        val addedBytes = doneRows.filter { it !in movedNow }.sumOf { planBytes[it] ?: 0L }
+        movedNow += doneRows.toSet()
         val arr = org.json.JSONArray()
         movedNow.sorted().forEach { arr.put(it) }
         rec.put("movedDepotIds", arr)
         rec.put("movedBatches", rec.optInt("movedBatches", 0) + 1)
-        val dirBytes = runCatching {
-            dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-        }.getOrDefault(0L)
-        rec.put("movedBytes", rec.optLong("movedBytes", 0L) + maxOf(dirBytes, rec.optLong("lastBatchBytes", 0L)))
+        rec.put("movedBytes", rec.optLong("movedBytes", 0L) +
+            maxOf(addedBytes, runCatching {
+                dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+            }.getOrDefault(0L)))
         saveBatchRecord(appId, rec)
 
-        // Free the phone: game content + staging + restores go with the batch.
+        // Regenerate the PC discovery files FIRST (fresh LATER-BATCH guide),
+        // then free the phone: content + staging + restore marker go with it.
+        lastRequest?.takeIf { it.appId == appId }?.let { writePcTransferFiles(dir, it) }
         runCatching { dir.deleteRecursively() }
         if (restoredRequest?.appId == appId) restoredRequest = null
         if (lastRequest?.appId == appId) lastRequest = null
         _state.value = DownloadSessionState()
-        log(LogLevel.OK, "Batch recorded as moved to PC (${movedNow.size} depot(s) total) — local copy deleted, space freed.")
+        log(
+            LogLevel.OK,
+            "Moved to PC recorded: ${doneRows.size} depot(s) (${movedNow.size} total) — local copy deleted; the balance auto-loads next time."
+        )
         return true
     }
 

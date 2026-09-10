@@ -1284,7 +1284,7 @@ private fun BatchTransferCard(
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Copy the game folder AND appmanifest_${summary.appId}.acf to the PC first (guide: TRANSFER_README_PC.txt in the game folder).",
+                text = "Copy the game folder AND appmanifest_${summary.appId}.acf to the PC first (guide: TRANSFER_README_PC.txt). Only 100%-finished depots count as moved — an in-flight depot restarts from 0% next time.",
                 fontSize = 10.sp,
                 color = TextSecondaryLight
             )
