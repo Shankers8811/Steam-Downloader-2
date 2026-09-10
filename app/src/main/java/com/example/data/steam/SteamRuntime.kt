@@ -409,7 +409,7 @@ class SteamRuntime(private val context: Context) {
                 info.packages.values.forEach { pkg ->
                     pkg.keyValues["appids"].children.forEach { child ->
                         val id = child.value?.trim()?.toIntOrNull()
-                            ?: child.name.trim().toIntOrNull()
+                            ?: child.name?.trim()?.toIntOrNull()
                         if (id != null && id > 0) grantedAppIds += id
                     }
                 }
