@@ -461,10 +461,26 @@ class DepotDownloadManager(
             if (report.baseUnverified && request.dlcMode != DlcMode.BASE_ONLY) {
                 log(LogLevel.WARN, "DLC licenses could not be pre-checked (web unreachable) — only base-game depots are selected this run; owned DLC can still be fetched in a later run once the web check succeeds.")
             }
-            val selected = selectDepots(fullPlan, request.dlcMode, licensedDlcIds)
+            // Snapshot the depot plan for the PC-transfer batch planner.
+            persistPlanSnapshot(request, fullPlan)
+
+            var selected = selectDepots(fullPlan, request.dlcMode, licensedDlcIds, request.depotIds)
+
+            // PC-transfer batches: content already moved to the PC is skipped
+            // automatically — the remaining depot set is exactly what's left.
+            val moved = batchRecordOf(request.appId)?.optStringSet("movedDepotIds").orEmpty()
+            if (moved.isNotEmpty()) {
+                val before = selected.size
+                selected = selected.filterNot { it.depotId in moved }
+                if (before != selected.size) {
+                    log(LogLevel.INFO, "PC-transfer mode: ${before - selected.size} depot(s) already moved to your PC — downloading only the balance.")
+                }
+            }
             if (selected.isEmpty()) {
                 failEngine(
-                    if (request.dlcMode == DlcMode.DLC_ONLY)
+                    if (moved.isNotEmpty())
+                        "Nothing left to download — every remaining depot was already moved to your PC. Merge the batches there and let Steam verify the install."
+                    else if (request.dlcMode == DlcMode.DLC_ONLY)
                         "No licensed DLC depots found for this app."
                     else
                         "No downloadable depots found for app ${request.appId} on branch '${request.branch}' (Windows x64)."
@@ -689,6 +705,10 @@ class DepotDownloadManager(
                     // Done for good — no session to restore next launch.
                     deleteSessionMarker(installDir)
                     activeInstallDir = null
+                    // PC-transfer pipeline: remember this batch + regenerate
+                    // the Steam appmanifest + README so discovery just works.
+                    recordCompletedBatch(request, selected, installDir)
+                    writePcTransferFiles(installDir, request)
                     log(LogLevel.OK, "\"${request.appName}\" fully installed to ${installDir.absolutePath} — files are verified and safe to move to your PC.")
                 }
             }
@@ -735,12 +755,327 @@ class DepotDownloadManager(
     private fun selectDepots(
         plan: List<DepotPlanEntry>,
         mode: DlcMode,
-        licensedDlcIds: Set<Int>
-    ): List<DepotPlanEntry> = when (mode) {
-        DlcMode.BASE_ONLY -> plan.filter { it.dlcAppId == null }
-        // Owned-DLC depots only (unlicensed ones are never selected — same as Steam).
-        DlcMode.BASE_AND_DLC -> plan.filter { it.dlcAppId == null || it.dlcAppId in licensedDlcIds }
-        DlcMode.DLC_ONLY -> plan.filter { it.dlcAppId != null && it.dlcAppId in licensedDlcIds }
+        licensedDlcIds: Set<Int>,
+        depotIdsRaw: String = ""
+    ): List<DepotPlanEntry> {
+        val base = when (mode) {
+            DlcMode.BASE_ONLY -> plan.filter { it.dlcAppId == null }
+            // Owned-DLC depots only (unlicensed ones are never selected — same as Steam).
+            DlcMode.BASE_AND_DLC -> plan.filter { it.dlcAppId == null || it.dlcAppId in licensedDlcIds }
+            DlcMode.DLC_ONLY -> plan.filter { it.dlcAppId != null && it.dlcAppId in licensedDlcIds }
+        }
+        val ids = depotIdsRaw
+            .split(',', ' ', ';')
+            .mapNotNull { it.trim().takeIf(String::isNotEmpty)?.toIntOrNull() }
+            .toSet()
+        if (ids.isEmpty()) return base
+        val unknown = ids - plan.map { it.depotId }.toSet()
+        if (unknown.isNotEmpty()) {
+            log(LogLevel.WARN, "Depot filter: id(s) ${unknown.joinToString(", ")} not in this app's depot plan — ignored.")
+        }
+        return base.filter { it.depotId in ids }
+    }
+
+    // ------------------------------------------------------------------
+    // PC-transfer batches (storage-limited phones)
+    // ------------------------------------------------------------------
+
+    /** UI-facing summary of the PC-transfer state for one app. */
+    data class BatchSummary(
+        val appId: Int,
+        val appName: String,
+        val planDepotCount: Int,
+        val planBytes: Long,
+        val movedDepotCount: Int,
+        val movedBytes: Long,
+        val movedBatches: Int,
+        val remainingDepotCount: Int,
+        val remainingBytes: Long,
+        val freeBytes: Long,
+        val lastBatchDepots: List<Int>,
+        val canMarkMoved: Boolean
+    )
+
+    /** Free/total bytes of the download volume (for the planner UI). */
+    fun storageInfo(): Pair<Long, Long> {
+        val root = installRoot
+        runCatching { root.mkdirs() }
+        val stat = android.os.StatFs(root.absolutePath)
+        return stat.availableBytes to stat.totalBytes
+    }
+
+    private fun batchFileOf(appId: Int): File = File(context.filesDir, "batches_$appId.json")
+
+    private fun batchRecordOf(appId: Int): org.json.JSONObject? = runCatching {
+        val file = batchFileOf(appId)
+        if (file.exists()) org.json.JSONObject(file.readText()) else null
+    }.getOrNull()
+
+    private fun saveBatchRecord(appId: Int, json: org.json.JSONObject) {
+        json.put("updatedAtMs", System.currentTimeMillis())
+        val tmp = File(context.filesDir, "batches_$appId.tmp")
+        runCatching {
+            tmp.writeText(json.toString())
+            val out = batchFileOf(appId)
+            if (!tmp.renameTo(out)) {
+                runCatching { tmp.copyTo(out, overwrite = true) }
+                tmp.delete()
+            }
+        }
+    }
+
+    private fun org.json.JSONObject.optStringSet(key: String): Set<Int> {
+        val arr = optJSONArray(key) ?: return emptySet()
+        val out = mutableSetOf<Int>()
+        for (i in 0 until arr.length()) out += arr.optInt(i)
+        return out
+    }
+
+    /** Persist the depot plan (before filters) for the batch planner card. */
+    private fun persistPlanSnapshot(request: DownloadRequest, plan: List<DepotPlanEntry>) {
+        val rec = batchRecordOf(request.appId) ?: org.json.JSONObject()
+            .put("appId", request.appId)
+            .put("appName", request.appName)
+        rec.put("appName", request.appName)
+        val arr = org.json.JSONArray()
+        plan.forEach { entry ->
+            arr.put(
+                org.json.JSONObject()
+                    .put("depotId", entry.depotId)
+                    .put("name", entry.name)
+                    .put("dlcAppId", entry.dlcAppId ?: 0)
+                    .put("sizeBytes", entry.sizeBytes)
+                    .put("downloadBytes", entry.downloadBytes)
+            )
+        }
+        rec.put("plan", arr)
+        if (!rec.has("movedDepotIds")) rec.put("movedDepotIds", org.json.JSONArray())
+        if (!rec.has("movedBytes")) rec.put("movedBytes", 0L)
+        if (!rec.has("movedBatches")) rec.put("movedBatches", 0)
+        saveBatchRecord(request.appId, rec)
+    }
+
+    /** Remember the depots of the batch that just completed (pre-moved). */
+    private fun recordCompletedBatch(request: DownloadRequest, selected: List<DepotPlanEntry>, installDir: File) {
+        val rec = batchRecordOf(request.appId) ?: org.json.JSONObject()
+            .put("appId", request.appId)
+            .put("appName", request.appName)
+        rec.put("appName", request.appName)
+        val arr = org.json.JSONArray()
+        selected.forEach { arr.put(it.depotId) }
+        rec.put("lastBatchDepots", arr)
+        rec.put("lastBatchBytes", selected.sumOf { it.sizeBytes })
+        rec.put("installDir", installDir.absolutePath)
+        if (!rec.has("movedDepotIds")) rec.put("movedDepotIds", org.json.JSONArray())
+        saveBatchRecord(request.appId, rec)
+    }
+
+    /**
+     * Writes Steam's own discovery files next to the game:
+     *  - "steamapps/appmanifest_<appId>.acf"  (StateFlags 4 = installed; Steam
+     *    re-validates content against the current manifests on discovery)
+     *  - "steamapps/common/<Game>/TRANSFER_README_PC.txt" (copy-both files steps)
+     * With these, Windows Steam shows "existing files found" and finishes
+     * validation instead of downloading everything again.
+     */
+    private fun writePcTransferFiles(installDir: File, request: DownloadRequest) {
+        runCatching {
+            val rec = batchRecordOf(request.appId)
+            val movedIds = rec?.optStringSet("movedDepotIds").orEmpty()
+            val movedBytes = rec?.optLong("movedBytes", 0L) ?: 0L
+            val localBytes = installDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+            val steamappsDir = installDir.parentFile?.parentFile ?: return@runCatching
+            val acf = File(steamappsDir, "appmanifest_${request.appId}.acf")
+            val unix = System.currentTimeMillis() / 1000L
+            val safeName = request.appName.replace(""", "'")
+            acf.writeText(
+                buildString {
+                    append(""AppState"
+{
+")
+                    append("	"appid"		"${request.appId}"
+")
+                    append("	"Universe"		"1"
+")
+                    append("	"name"		"$safeName"
+")
+                    append("	"StateFlags"		"4"
+")
+                    append("	"installdir"		"${installDir.name}"
+")
+                    append("	"LastUpdated"		"$unix"
+")
+                    append("	"UpdateResult"		"0"
+")
+                    append("	"SizeOnDisk"		"${movedBytes + localBytes}"
+")
+                    append("	"BuildID"		"0"
+")
+                    append("	"LastOwner"		"0"
+")
+                    append("	"BytesToDownload"		"0"
+")
+                    append("	"BytesDownloaded"		"0"
+")
+                    append("	"AutoUpdateBehavior"		"0"
+")
+                    append("	"AllowOtherDownloadsWhileRunning"		"0"
+")
+                    append("	"ScheduledAutoUpdate"		"0"
+")
+                    append("	"UserConfig"
+	{
+		"language"		"english"
+	}
+")
+                    append("}
+")
+                }
+            )
+            val remainingHint = if (movedIds.isNotEmpty()) {
+                "
+This is a LATER batch — the first batch(es) (${movedIds.size} depot(s), ${formatBytes(movedBytes)}) are already on your PC. Copy this batch INTO the same folder in step 2 (files do not overlap; choose "Skip" if Windows asks about replacing) and replace appmanifest_${request.appId}.acf with this newest copy.
+"
+            } else ""
+            File(installDir, "TRANSFER_README_PC.txt").writeText(
+                "PC TRANSFER — ${request.appName} (app ${request.appId})
+" +
+                    "===================================================
+
+" +
+                    "1. On your PC open your Steam library folder, e.g.
+" +
+                    "   C:\Program Files (x86)\Steam\steamapps\
+
+" +
+                    "2. Copy this folder ("${installDir.name}") into:
+" +
+                    "   steamapps\common\  so the final path is
+" +
+                    "   steamapps\common\${installDir.name}\
+
+" +
+                    "3. Copy the file "appmanifest_${request.appId}.acf" — it sits one level
+" +
+                    "   ABOVE this folder (in steamapps\) — into the PC's steamapps\ folder,
+" +
+                    "   right next to the "common" folder.
+" + remainingHint + "
+" +
+                    "4. Fully close Steam (system tray icon -> Exit), then start it again.
+" +
+                    "   Steam finds the existing files, runs a validation scan
+" +
+                    "   ("Discovering existing files") and then the game is ready to PLAY.
+" +
+                    "   If a batch is still missing, Steam downloads just that part.
+"
+            )
+            log(LogLevel.OK, "PC transfer files written: appmanifest_${request.appId}.acf + TRANSFER_README_PC.txt")
+        }
+    }
+
+    /** Batch summary for the UI card (null when this app never started). */
+    fun getBatchSummary(appId: Int): BatchSummary? {
+        val rec = batchRecordOf(appId) ?: return null
+        val planArr = rec.optJSONArray("plan")
+        var planCount = 0
+        var planBytes = 0L
+        val moved = rec.optStringSet("movedDepotIds")
+        var remainingCount = 0
+        var remainingBytes = 0L
+        if (planArr != null) {
+            for (i in 0 until planArr.length()) {
+                val p = planArr.optJSONObject(i) ?: continue
+                planCount++
+                planBytes += p.optLong("sizeBytes", 0L)
+                if (p.optInt("depotId") !in moved) {
+                    remainingCount++
+                    remainingBytes += p.optLong("sizeBytes", 0L)
+                }
+            }
+        }
+        val lastArr = rec.optJSONArray("lastBatchDepots")
+        val lastBatch = mutableListOf<Int>()
+        if (lastArr != null) for (i in 0 until lastArr.length()) lastBatch += lastArr.optInt(i)
+        val (free, _) = storageInfo()
+        val st = _state.value
+        return BatchSummary(
+            appId = appId,
+            appName = rec.optString("appName", "App $appId"),
+            planDepotCount = planCount,
+            planBytes = planBytes,
+            movedDepotCount = moved.size,
+            movedBytes = rec.optLong("movedBytes", 0L),
+            movedBatches = rec.optInt("movedBatches", 0),
+            remainingDepotCount = remainingCount,
+            remainingBytes = remainingBytes,
+            freeBytes = free,
+            lastBatchDepots = lastBatch,
+            canMarkMoved = st.phase == SessionPhase.COMPLETED && st.appId == appId &&
+                lastBatch.isNotEmpty()
+        )
+    }
+
+    /**
+     * Greedy "next balance" batch: smallest-first depot selection under
+     * [targetBytes]. null when nothing remains.
+     */
+    fun suggestNextBatch(appId: Int, targetBytes: Long): Triple<List<Int>, Long, Int>? {
+        val rec = batchRecordOf(appId) ?: return null
+        val planArr = rec.optJSONArray("plan") ?: return null
+        val moved = rec.optStringSet("movedDepotIds")
+        val pool = mutableListOf<Triple<Int, Long, Long>>() // id, sizeBytes, downloadBytes
+        for (i in 0 until planArr.length()) {
+            val p = planArr.optJSONObject(i) ?: continue
+            val id = p.optInt("depotId")
+            if (id !in moved) pool += Triple(id, p.optLong("sizeBytes", 0L), p.optLong("downloadBytes", 0L))
+        }
+        if (pool.isEmpty()) return null
+        pool.sortBy { it.second }
+        val chosen = mutableListOf<Int>()
+        var bytes = 0L
+        for ((id, size, _) in pool) {
+            if (bytes + size <= targetBytes || chosen.isEmpty()) {
+                chosen += id
+                bytes += size
+            }
+        }
+        return Triple(chosen, bytes, pool.size)
+    }
+
+    /**
+     * After the user copied the just-completed batch to the PC: record its
+     * depots as moved and delete the local copy so the phone has room for
+     * the next batch. Only valid right after COMPLETED.
+     */
+    fun markBatchMovedAndPurge(): Boolean {
+        val st = _state.value
+        if (engineJob?.isActive == true || st.phase != SessionPhase.COMPLETED) return false
+        val appId = st.appId
+        val rec = batchRecordOf(appId) ?: return false
+        val lastArr = rec.optJSONArray("lastBatchDepots") ?: return false
+        val dir = installDirForAppId(appId) ?: return false
+
+        val movedNow = rec.optStringSet("movedDepotIds").toMutableSet()
+        for (i in 0 until lastArr.length()) movedNow += lastArr.optInt(i)
+        val arr = org.json.JSONArray()
+        movedNow.sorted().forEach { arr.put(it) }
+        rec.put("movedDepotIds", arr)
+        rec.put("movedBatches", rec.optInt("movedBatches", 0) + 1)
+        val dirBytes = runCatching {
+            dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+        }.getOrDefault(0L)
+        rec.put("movedBytes", rec.optLong("movedBytes", 0L) + maxOf(dirBytes, rec.optLong("lastBatchBytes", 0L)))
+        saveBatchRecord(appId, rec)
+
+        // Free the phone: game content + staging + restores go with the batch.
+        runCatching { dir.deleteRecursively() }
+        if (restoredRequest?.appId == appId) restoredRequest = null
+        if (lastRequest?.appId == appId) lastRequest = null
+        _state.value = DownloadSessionState()
+        log(LogLevel.OK, "Batch recorded as moved to PC (${movedNow.size} depot(s) total) — local copy deleted, space freed.")
+        return true
     }
 
     // ------------------------------------------------------------------

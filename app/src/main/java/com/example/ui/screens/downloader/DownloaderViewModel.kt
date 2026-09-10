@@ -73,6 +73,58 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     private val _statusNotification = MutableStateFlow<String?>(null)
     val statusNotification: StateFlow<String?> = _statusNotification.asStateFlow()
 
+    /** PC-transfer batch state for the selected/running app (storage rescue). */
+    private val _batchSummary = MutableStateFlow<com.example.data.download.DepotDownloadManager.BatchSummary?>(null)
+    val batchSummary: StateFlow<com.example.data.download.DepotDownloadManager.BatchSummary?> =
+        _batchSummary.asStateFlow()
+
+    /** Re-reads the batch record for the app currently selected or running. */
+    fun refreshBatchSummary() {
+        val appId = sessionState.value.appId.takeIf { it != 0 }
+            ?: _appIdInput.value.toIntOrNull() ?: run {
+            _batchSummary.value = null
+            return
+        }
+        _batchSummary.value = manager.getBatchSummary(appId)
+    }
+
+    /**
+     * Fills the depot-IDs input with a greedy "next balance" plan that fits
+     * [targetGb] gigabytes (defaults to ~90% of free space when 0 / blank).
+     */
+    fun planNextBatch(targetGb: String) {
+        val appId = sessionState.value.appId.takeIf { it != 0 }
+            ?: _appIdInput.value.toIntOrNull() ?: return
+        val parsedGb = targetGb.replace(',', '.').toDoubleOrNull() ?: 0.0
+        val targetBytes = if (parsedGb > 0.0) {
+            (parsedGb * 1024.0 * 1024.0 * 1024.0).toLong()
+        } else {
+            ((manager.storageInfo().first) * 9L) / 10L // 90% of free space
+        }
+        val suggestion = manager.suggestNextBatch(appId, targetBytes)
+        if (suggestion == null) {
+            _statusNotification.value = "Nothing left — all depots of app $appId are already on your PC."
+            refreshBatchSummary()
+            return
+        }
+        val (ids, bytes, remaining) = suggestion
+        _depotIdsInput.value = ids.joinToString(", ")
+        _statusNotification.value =
+            "Batch plan ready: ${ids.size} of $remaining remaining depot(s), ~${com.example.ui.util.FormatUtils.formatBytes(bytes)}. Press START DOWNLOAD."
+        refreshBatchSummary()
+    }
+
+    /** After copying the completed batch to the PC: record as moved + free space. */
+    fun markBatchMovedAndPurge() {
+        if (manager.markBatchMovedAndPurge()) {
+            _statusNotification.value =
+                "Batch marked as moved — local copy deleted. Pick the game again and PLAN the next batch."
+        } else {
+            _statusNotification.value = "No completed batch to mark — finish a download first."
+        }
+        refreshBatchSummary()
+    }
+
     /** Room row tracking the active session for download history. */
     private var historyTaskId: Int? = null
 
@@ -80,9 +132,19 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
         // Keep the Room history row in sync with engine state transitions.
         viewModelScope.launch {
             sessionState.collect { state ->
-                if (state.appId == 0) return@collect
+                if (state.appId == 0) {
+                    if (lastSummaryPhase != SessionPhase.IDLE) {
+                        lastSummaryPhase = SessionPhase.IDLE
+                        refreshBatchSummary()
+                    }
+                    return@collect
+                }
                 val previous = sessionStatePhaseTracker
                 sessionStatePhaseTracker = state.phase
+                if (state.phase != lastSummaryPhase) {
+                    lastSummaryPhase = state.phase
+                    refreshBatchSummary()
+                }
                 if (previous == state.phase && state.progressPercent < 100f) return@collect
                 upsertHistoryTask(state)
             }
@@ -126,6 +188,7 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private var sessionStatePhaseTracker: SessionPhase = SessionPhase.IDLE
+    private var lastSummaryPhase: SessionPhase? = null
 
     private suspend fun upsertHistoryTask(state: DownloadSessionState) {
         val status = when (state.phase) {
@@ -184,6 +247,7 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     fun prefillFromLibrary(appId: Int, gameName: String) {
         _appIdInput.value = appId.toString()
         _appNameInput.value = gameName
+        refreshBatchSummary()
         _statusNotification.value = "Pre-filled $gameName (app $appId) — press Start to validate licenses & download."
     }
 

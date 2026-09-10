@@ -666,6 +666,12 @@ fun DownloaderScreen(
                 }
             }
 
+            // ---------------- PC transfer / batches ----------------
+            val batchSummary by viewModel.batchSummary.collectAsStateWithLifecycle()
+            batchSummary?.let { summary ->
+                BatchTransferCard(summary, viewModel)
+            }
+
             // ---------------- Target configuration ----------------
             WhiteCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
@@ -1165,5 +1171,123 @@ fun DlcModeOption(
             color = TextPrimaryLight,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
         )
+    }
+}
+
+@Composable
+private fun BatchTransferCard(
+    summary: com.example.data.download.DepotDownloadManager.BatchSummary,
+    viewModel: DownloaderViewModel
+) {
+    WhiteCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "PC TRANSFER / BATCHES",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextSecondaryLight,
+                letterSpacing = 1.5.sp
+            )
+            Text(
+                text = "FREE  ${FormatUtils.formatBytes(summary.freeBytes)}",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = ActiveGreen
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        if (summary.planDepotCount > 0) {
+            Text(
+                text = "Game plan: ${summary.planDepotCount} depot(s) · ${FormatUtils.formatBytes(summary.planBytes)}",
+                fontSize = 11.sp,
+                color = TextPrimaryLight
+            )
+        }
+        if (summary.movedDepotCount > 0) {
+            Text(
+                text = "Moved to PC: ${summary.movedDepotCount} depot(s) · ${FormatUtils.formatBytes(summary.movedBytes)} (${summary.movedBatches} batch(es) done)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = ActiveGreen
+            )
+        }
+        if (summary.remainingDepotCount > 0) {
+            Text(
+                text = "Remaining on Steam's side: ${summary.remainingDepotCount} depot(s) · ${FormatUtils.formatBytes(summary.remainingBytes)}",
+                fontSize = 11.sp,
+                color = TextPrimaryLight
+            )
+        } else {
+            Text(
+                text = "Everything was moved to the PC — merge the batches there and let Steam verify.",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = ActiveGreen
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        var batchGb by remember { mutableStateOf("") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = batchGb,
+                onValueChange = { batchGb = it },
+                label = { Text("Batch size GB (blank = fits free space)", fontSize = 11.sp) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.Black,
+                    unfocusedBorderColor = Color(0xFF9CA3AF),
+                    focusedLabelColor = Color.Black,
+                    unfocusedLabelColor = TextSecondaryLight,
+                    cursorColor = Color.Black,
+                    focusedTextColor = TextPrimaryLight,
+                    unfocusedTextColor = TextPrimaryLight
+                )
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = { viewModel.planNextBatch(batchGb) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Black, contentColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("PLAN", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+            }
+        }
+        if (summary.movedDepotCount > 0) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Moved depots are auto-skipped: a fresh download picks up only the balance.",
+                fontSize = 10.sp,
+                color = TextSecondaryLight
+            )
+        }
+        if (summary.canMarkMoved) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = { viewModel.markBatchMovedAndPurge() },
+                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed.copy(alpha = 0.90f), contentColor = Color.White),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("mark_moved_button")
+            ) {
+                Text(
+                    "MOVED TO PC — DELETE LOCAL COPY",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Copy the game folder AND appmanifest_${summary.appId}.acf to the PC first (guide: TRANSFER_README_PC.txt in the game folder).",
+                fontSize = 10.sp,
+                color = TextSecondaryLight
+            )
+        }
     }
 }
