@@ -84,8 +84,7 @@ jobs:
           OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
           RC=$?
           if [ $RC -ne 0 ]; then
-            printf '::error title=PR-comment-failed::%s
-' "$(echo "$OUT" | head -c 400)"
+            printf '::error title=PR-comment-failed::%s\n' "$(echo "$OUT" | head -c 400)"
             cat pr-comment.md > /tmp/comment-body.txt || true
           fi
           exit 0
@@ -181,7 +180,6 @@ jobs:
           OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
           RC=$?
           if [ $RC -ne 0 ]; then
-            printf '::error title=PR-comment-failed::%s
-' "$(echo "$OUT" | head -c 400)"
+            printf '::error title=PR-comment-failed::%s\n' "$(echo "$OUT" | head -c 400)"
           fi
           exit 0
