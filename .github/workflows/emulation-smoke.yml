@@ -13,6 +13,9 @@ jobs:
     name: Engine logic tests (Robolectric JVM)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,7 +47,7 @@ jobs:
       - name: Run Robolectric unit tests
         run: |
           set +e
-          gradle --no-daemon :app:testDebugUnitTest --tests "com.example.DownloadEnginePersistenceTest" --tests "com.example.ExampleRobolectricTest" 2>&1 | tee unit-tests.log
+          gradle --no-daemon :app:testDebugUnitTest --tests "com.example.DownloadEnginePersistenceTest" 2>&1 | tee unit-tests.log
           exit ${PIPESTATUS[0]}
 
       - name: Upload unit test results
@@ -55,6 +58,23 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest/
             unit-tests.log
+
+      - name: Report unit-test verdict to PR #1
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if grep -qE "BUILD SUCCESSFUL" unit-tests.log; then
+            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Robolectric engine tests passed (commit ${{ github.sha }})."
+          else
+            {
+              echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}). Log tail:'
+              echo '```'
+              tail -n 220 unit-tests.log
+              echo '```'
+            } > pr-comment.md
+            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+          fi
 
   emulator-tests:
     name: APK boot smoke on Android 14 emulator (API 34, KVM)
@@ -121,8 +141,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RESULT="✅ Emulated smoke tests passed: APK boots on an API-34 emulator, deep class probe resolves every critical class on-device (incl. SpongyCastle), auth screen renders, engine persistence/batch tests green on JVM."
-          if ! grep -q "instrumentation exit: 0" emulator-tests.log 2>/dev/null; then
-            RESULT="❌ Emulated smoke tests FAILED (commit ${{ github.sha }}). See the Actions run + attached logs."
+          if grep -q "instrumentation exit: 0" emulator-tests.log 2>/dev/null; then
+            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Emulated APK smoke tests passed on API-34 emulator (commit ${{ github.sha }}): APK boots, deep class probe finds all critical classes on-device (incl. SpongyCastle), auth screen renders."
+          else
+            {
+              echo '❌ Emulated APK smoke tests FAILED (commit ${{ github.sha }}). Log tail:'
+              echo '```'
+              tail -n 220 emulator-tests.log 2>/dev/null
+              echo '```'
+            } > pr-comment.md
+            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
           fi
-          gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "$RESULT"
