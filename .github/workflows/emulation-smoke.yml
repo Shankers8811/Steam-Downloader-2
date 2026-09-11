@@ -1,8 +1,9 @@
 name: Emulated app smoke tests
 
-# Self-drives the app on a real API-34 Android emulator (KVM on the GitHub
-# runner) plus JVM/Robolectric engine tests — the agent's emulation rig to
-# catch device-only bugs without needing anyone's Steam account.
+# Self-drives the app on a real API-34 Android emulator (GitHub runner, KVM)
+# plus JVM/Robolectric engine tests — the agent's emulation rig to catch
+# device-only bugs without needing anyone's Steam account. Every failure
+# detail is echoed back into a PR #1 comment (log hosts are unreliable).
 on:
   push:
     branches: [ "arena/01a0859b-steam-downloader-2" ]
@@ -40,7 +41,7 @@ jobs:
           yes | sdkmanager --licenses > /dev/null
           sdkmanager "platforms;android-36.1" "build-tools;36.0.0" "platform-tools"
 
-      - name: Set up Gradle 9.1.0 (repo deliberately ships no wrapper)
+      - name: Set up Gradle (repo deliberately ships no wrapper)
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
@@ -50,15 +51,6 @@ jobs:
           set +e
           gradle --no-daemon :app:testDebugUnitTest --tests "com.example.DownloadEnginePersistenceTest" 2>&1 | tee unit-tests.log
           exit ${PIPESTATUS[0]}
-
-      - name: Upload unit test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-results
-          path: |
-            app/build/reports/tests/testDebugUnitTest/
-            unit-tests.log
 
       - name: Report unit-test verdict to PR #1
         if: always()
@@ -73,20 +65,18 @@ jobs:
           {
             echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}).'
             echo
-            echo 'Error lines:'
+            echo 'Failures and error lines:'
             echo '```'
-            grep -aE "e: |error:|Unresolved|FAILED|Exception" unit-tests.log | head -60
+            grep -aE "FAILED$|e: |error:|AssertionError|expected|Exception" unit-tests.log | head -60
             echo '```'
             echo 'Tail:'
             echo '```'
-            tail -n 80 unit-tests.log
+            tail -n 60 unit-tests.log
             echo '```'
           } > pr-comment.md 2>&1 || true
           OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
-          RC=$?
-          if [ $RC -ne 0 ]; then
+          if [ $? -ne 0 ]; then
             printf '::error title=PR-comment-failed::%s\n' "$(echo "$OUT" | head -c 400)"
-            cat pr-comment.md > /tmp/comment-body.txt || true
           fi
           exit 0
 
@@ -113,43 +103,34 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up Gradle 9.1.0 (repo deliberately ships no wrapper)
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "9.3.1"
-
       - name: Enable KVM for hardware-accelerated emulation
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
 
-      - name: Boot emulator and run instrumented smoke tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          profile: Nexus 6P
-          disk-size: 4G
-          heap-size: 512M
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -memory 4096
-          script: |
-            set +e
-            gradle --no-daemon :app:connectedDebugAndroidTest \
-              -Pandroid.testInstrumentationRunnerArguments.class=com.example.EmulatedBootSmokeTest 2>&1 | tee emulator-tests.log
-            echo "instrumentation exit: ${PIPESTATUS[0]}"
-            exit ${PIPESTATUS[0]}
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Upload emulator test results
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Install emulator, system image and platform packages
+        run: |
+          set +e
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-36.1" "build-tools;36.0.0" "platform-tools" \
+            "emulator" "system-images;android-34;google_apis;x86_64" "cmdline-tools;latest"
+
+      - name: Set up Gradle (repo deliberately ships no wrapper)
+        uses: gradle/actions/setup-gradle@v4
         with:
-          name: emulator-test-results
-          path: |
-            app/build/reports/androidTests/connected/
-            emulator-tests.log
+          gradle-version: "9.3.1"
+
+      - name: Build, boot emulator, run instrumented smoke tests
+        run: |
+          set +e
+          bash scripts/emu-smoke.sh 2>&1 | tee emulator-tests.log
+          exit ${PIPESTATUS[0]}
 
       - name: Report emulation verdict to PR #1
         if: always()
@@ -157,11 +138,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          if [ -f emulator-tests.log ] && grep -q "instrumentation exit: 0" emulator-tests.log; then
-            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Emulated APK smoke tests passed on API-34 emulator (commit ${{ github.sha }}). Log excerpt:"
+          if [ -f emulator-tests.log ] && grep -q "INSTRUMENTATION_OK" emulator-tests.log; then
             {
+              echo "✅ Emulated APK smoke tests passed on API-34 emulator (commit ${{ github.sha }})."
               echo '```'
-              grep -E "BUILD SUCCESSFUL|PASSED|OK    |tests? (completed|finished)" emulator-tests.log | tail -n 30
+              grep -aE "INSTRUMENTATION_OK|PASSED|OK    |BUILD SUCCESSFUL" emulator-tests.log | head -30
               echo '```'
             } > pr-comment.md
             gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
@@ -172,7 +153,7 @@ jobs:
             echo
             echo 'Error lines:'
             echo '```'
-            grep -aE "e: |error:|Unresolved|FAILED|Error|FAILURES!!!" emulator-tests.log | head -80
+            grep -aE "FAILED|Error|Unresolved|FAILURES!!!|Exception" emulator-tests.log | head -80
             echo '```'
             echo 'Tail:'
             echo '```'
@@ -180,8 +161,7 @@ jobs:
             echo '```'
           } > pr-comment.md 2>&1 || true
           OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
-          RC=$?
-          if [ $RC -ne 0 ]; then
+          if [ $? -ne 0 ]; then
             printf '::error title=PR-comment-failed::%s\n' "$(echo "$OUT" | head -c 400)"
           fi
           exit 0
