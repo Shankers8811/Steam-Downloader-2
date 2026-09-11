@@ -49,7 +49,7 @@ jobs:
       - name: Run Robolectric unit tests
         run: |
           set +e
-          gradle --no-daemon :app:testDebugUnitTest --tests "com.example.DownloadEnginePersistenceTest" 2>&1 | tee unit-tests.log
+          gradle --no-daemon :app:testDebugUnitTest 2>&1 | tee unit-tests.log
           exit ${PIPESTATUS[0]}
 
       - name: Report unit-test verdict to PR #1

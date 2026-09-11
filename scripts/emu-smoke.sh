@@ -98,7 +98,7 @@ echo "== connected devices =="
 
 echo "== connected androidTest =="
 gradle --no-daemon :app:connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.class=com.example.EmulatedBootSmokeTest
+  -Pandroid.testInstrumentationRunnerArguments.class=com.example.EmulatedBootSmokeTest,com.example.AppUiInteractionTest
 TR=$?
 echo "connectedTest rc=$TR"
 
