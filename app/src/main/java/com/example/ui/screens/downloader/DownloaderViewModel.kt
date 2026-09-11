@@ -295,6 +295,17 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
             historyTaskId = null
             sessionStatePhaseTracker = SessionPhase.IDLE
 
+            // CM health before engine start: the ownership cache above can
+            // answer from disk while the socket is dead — heal the session
+            // right here so the human never meets a spurious "not signed in"
+            // engine failure. Auto re-logon uses the remembered CM creds.
+            services.steamRuntime.connect()
+            if (!services.steamRuntime.waitLoggedOn(30_000L)) {
+                _statusNotification.value =
+                    "Steam servers are unreachable right now — retry in a few seconds."
+                return@launch
+            }
+
             manager.start(
                 DownloadRequest(
                     appId = appId,

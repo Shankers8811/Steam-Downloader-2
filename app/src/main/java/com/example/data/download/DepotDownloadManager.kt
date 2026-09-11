@@ -403,9 +403,17 @@ class DepotDownloadManager(
         try {
             // ---------------- CM session assert ----------------
             update { it.copy(statusMessage = "Checking Steam connection…") }
-            if (!runtime.waitLoggedOn(10_000L)) {
-                failEngine("Not signed in to Steam — sign in first, then start the download.")
-                return
+            if (!runtime.waitLoggedOn(7_000L)) {
+                // A dropped socket must not look like a sign-out: nudge a
+                // reconnect — auto re-logon uses the remembered CM creds.
+                log(LogLevel.WARN, "CM not logged on — attempting reconnect before failing…")
+                update { it.copy(statusMessage = "Re-establishing the Steam connection…") }
+                runtime.connect()
+                if (!runtime.waitLoggedOn(25_000L)) {
+                    failEngine("Not signed in to Steam — sign in first, then start the download.")
+                    return
+                }
+                log(LogLevel.INFO, "Steam connection recovered.")
             }
 
             // ---------------- VALIDATING_LICENSE ----------------

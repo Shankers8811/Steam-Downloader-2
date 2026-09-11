@@ -84,6 +84,12 @@ class SteamRuntime(private val context: Context) {
     private var callbackManager: CallbackManager? = null
     private var callbackPumpJob: Job? = null
     private var autoReconnectJob: Job? = null
+
+    /** One-shot self-healing logon after a (re)connect; remembered only from
+     *  a logon that actually succeeded, cleared on deliberate disconnect. */
+    private var autoRelogonJob: Job? = null
+    private var lastAccountName: String? = null
+    private var lastRefreshToken: String? = null
     private val subscriptions = mutableListOf<Closeable>()
 
     // ------------------------------------------------------------------
@@ -184,6 +190,11 @@ class SteamRuntime(private val context: Context) {
     fun disconnect() {
         expectConnected = false
         autoReconnectJob?.cancel()
+        autoRelogonJob?.cancel()
+        // Deliberate disconnect = forget the CM credentials too; the next
+        // sign-in re-establishes them.
+        lastAccountName = null
+        lastRefreshToken = null
         runCatching { client.disconnect() }
         _connected.value = false
         _loggedOn.value = false
@@ -192,6 +203,22 @@ class SteamRuntime(private val context: Context) {
     private fun onConnected() {
         _connected.value = true
         log("Connected to a Steam CM server.")
+        // A (re)connected socket alone is NOT a signed-in CM session. If we
+        // hold remembered CM credentials, re-log-on automatically — otherwise
+        // every later download gate keeps failing as spurious "not signed in".
+        if (autoRelogonJob?.isActive != true) {
+            val acc = lastAccountName
+            val tok = lastRefreshToken
+            if (acc != null && tok != null) {
+                autoRelogonJob = scope.launch {
+                    delay(1_000L) // let any in-flight explicit logon claim first
+                    if (_loggedOn.value) return@launch
+                    if (pendingLogon.isActive) return@launch
+                    val er = logonWithToken(acc, tok)
+                    if (er != EResult.OK) log("Auto re-logon after reconnect failed: $er")
+                }
+            }
+        }
     }
 
     private fun onDisconnected(callback: DisconnectedCallback) {
@@ -308,7 +335,14 @@ class SteamRuntime(private val context: Context) {
         user.logOn(details)
 
         val callback = waitLogon(30_000L)
-        callback?.result ?: EResult.Timeout
+        val result: EResult = callback?.result ?: EResult.Timeout
+        // Remember the working CM credentials so an unexpected socket drop
+        // can self-heal by re-logging-on on the next connect.
+        if (result == EResult.OK) {
+            lastAccountName = accountName.trim()
+            lastRefreshToken = token
+        }
+        result
     }
 
     private suspend fun waitLogon(timeoutMs: Long): LoggedOnCallback? =
