@@ -342,6 +342,25 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
         _statusNotification.value = "Staged partial data for app $appId cleared."
     }
 
+    /** One-tap purge: remove every downloaded file from this device
+     *  (games, partial chunks, batch/transfer bookkeeping). Works fully
+     *  offline on any Android phone/tablet, no Google services involved.
+     *  Refuses while the engine is mid-download rather than corrupt files. */
+    fun deleteAllDownloadedFiles() {
+        viewModelScope.launch {
+            when (val result = manager.purgeAllDownloadedData()) {
+                null ->
+                    _statusNotification.value =
+                        "A download is running — cancel it first, then delete everything."
+                else -> {
+                    val (freed, items) = result
+                    _statusNotification.value =
+                        "All downloaded files deleted — freed ${com.example.ui.util.FormatUtils.formatBytes(freed)} across $items item(s). Account & library untouched."
+                }
+            }
+        }
+    }
+
     private fun startForegroundServiceSafely() {
         try {
             val intent = Intent(getApplication(), DownloadForegroundService::class.java)

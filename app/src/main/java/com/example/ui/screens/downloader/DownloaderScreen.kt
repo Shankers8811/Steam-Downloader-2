@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -552,6 +554,12 @@ fun DownloaderScreen(
                     }
                 }
             }
+
+            // ---------------- Delete everything (full-device purge) ----------------
+            PurgeAllDownloadsCard(
+                engineActive = state.isEngineActive,
+                onPurge = { viewModel.deleteAllDownloadedFiles() }
+            )
 
             // ---------------- License report ----------------
             state.licenseReport?.let { report ->
@@ -1288,6 +1296,100 @@ private fun BatchTransferCard(
                 fontSize = 10.sp,
                 color = TextSecondaryLight
             )
+        }
+    }
+}
+
+/** Danger card: one-tap, full-device purge of everything the app has placed
+ *  on this phone/tablet — installed games, partial chunks and transfer
+ *  bookkeeping. Plain filesystem ops only: no Google services, no special
+ *  Android permissions, so this works on de-Googled devices the same way. */
+@Composable
+private fun PurgeAllDownloadsCard(
+    engineActive: Boolean,
+    onPurge: () -> Unit
+) {
+    var showConfirm by remember { mutableStateOf(false) }
+
+    if (showConfirm) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            title = { Text("Delete all downloaded files?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Every game this app downloaded, every partial chunk and the\n" +
+                        "PC-transfer bookkeeping will be permanently deleted from this device.\n\n" +
+                        "Your Steam sign-in and library stay untouched. This can not be undone.",
+                    fontSize = 12.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirm = false
+                    onPurge()
+                }, modifier = Modifier.testTag("confirm_delete_all")) {
+                    Text("DELETE ALL", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = false }, modifier = Modifier.testTag("cancel_delete_all")) {
+                    Text("CANCEL")
+                }
+            }
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0x22EF4444),
+        border = BorderStroke(1.dp, Color(0x44EF4444)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "DELETE EVERYTHING DOWNLOADED",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFEF4444),
+                    letterSpacing = 1.5.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (engineActive)
+                        "Finish or cancel the running download first — files can not be deleted while the engine is writing."
+                    else
+                        "Removes all games, partial chunks and transfer records this app ever placed on this device. Works offline, with or without Google services.",
+                    fontSize = 10.sp,
+                    color = Color(0x99FFFFFF),
+                    maxLines = 3
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Button(
+                onClick = { showConfirm = true },
+                enabled = !engineActive,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFEF4444),
+                    contentColor = Color.White,
+                    disabledContainerColor = Color(0x33EF4444),
+                    disabledContentColor = Color(0x88FFFFFF)
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("delete_all_downloads")
+            ) {
+                Text(
+                    "DELETE ALL FILES",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+            }
         }
     }
 }

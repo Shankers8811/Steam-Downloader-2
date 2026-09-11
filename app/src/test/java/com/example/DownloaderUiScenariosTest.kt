@@ -1,6 +1,12 @@
 package com.example
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import java.io.File
+import com.example.ScenarioTestHarness.awaitVisible
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.test.core.app.ApplicationProvider
 import com.example.ScenarioTestHarness.assertAnyVisible
 import com.example.ScenarioTestHarness.assertNoneVisible
@@ -145,5 +151,68 @@ class DownloaderUiScenariosTest {
         // Title always present; the placeholder/copy behind it is expanded on
         // demand via the SHOW/HIDE toggles.
         composeRule.assertAnyVisible("ENGINE LOG")
+    }
+
+    // ---------------- Full-device purge ("delete everything downloaded") ----------------
+
+    private fun seedDownloadedFiles(): List<File> {
+        val external = app.getExternalFilesDir(null)!!
+        val gameDir = File(external, "SteamLibrary/steamapps/common/Batch Game").apply { mkdirs() }
+        File(gameDir, "bin/client.dll").apply { parentFile!!.mkdirs() }.writeText("game bytes")
+        val staging = File(gameDir, ".DepotDownloader").apply { mkdirs() }
+        File(staging, "ledger.bin").writeText("partial chunks")
+        File(staging, "session.json").writeText("{}")
+        val batches = File(app.filesDir, "batches_400.json").apply { writeText("{\"appId\":400}") }
+        val installs = File(app.filesDir, "installs.json").apply { writeText("{\"400\":\"$gameDir\"}") }
+        return listOf(gameDir, staging, batches, installs)
+    }
+
+    @Test
+    fun `delete-all entry is visible with one tap away`() {
+        showDownloader(stateFor(SessionPhase.IDLE))
+        composeRule.assertAnyVisible("DELETE EVERYTHING DOWNLOADED")
+        composeRule.onNodeWithTag("delete_all_downloads", useUnmergedTree = true)
+            .assertIsEnabled()
+    }
+
+    @Test
+    fun `purge is blocked while the engine is writing`() = kotlinx.coroutines.runBlocking {
+        showDownloader(stateFor(SessionPhase.DOWNLOADING))
+        composeRule.onNodeWithTag("delete_all_downloads", useUnmergedTree = true)
+            .assertIsNotEnabled()
+        val result = app.downloadManager.purgeAllDownloadedData()
+        assert(result == null) { "purge must refuse mid-download, got $result" }
+    }
+
+    @Test
+    fun `confirming the dialog deletes every downloaded file and reports bytes freed`() {
+        val files = seedDownloadedFiles()
+        showDownloader(stateFor(SessionPhase.IDLE))
+        composeRule.onNodeWithTag("delete_all_downloads", useUnmergedTree = true)
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.assertAnyVisible("Delete all downloaded files?")
+        composeRule.assertAnyVisible("Your Steam sign-in and library stay untouched")
+        composeRule.onNodeWithTag("confirm_delete_all", useUnmergedTree = true)
+            .performClick()
+        composeRule.awaitVisible("All downloaded files deleted")
+        files.forEach { f ->
+            org.junit.Assert.assertFalse("still on disk after purge: $f", f.exists())
+        }
+    }
+
+    @Test
+    fun `cancelling the dialog keeps every file intact`() {
+        val files = seedDownloadedFiles()
+        showDownloader(stateFor(SessionPhase.IDLE))
+        composeRule.onNodeWithTag("delete_all_downloads", useUnmergedTree = true)
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("cancel_delete_all", useUnmergedTree = true)
+            .performClick()
+        composeRule.waitForIdle()
+        files.forEach { f ->
+            org.junit.Assert.assertTrue("lost after cancelled purge: $f", f.exists())
+        }
     }
 }

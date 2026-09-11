@@ -199,6 +199,49 @@ class DepotDownloadManager(
         log(LogLevel.INFO, "Staging for app $appId cleared (${formatBytes(stagedBytes)}).")
     }
 
+    /**
+     * Deletes EVERYTHING the app has ever placed on this device: every
+     * installed game folder (all library roots, internal storage too),
+     * staged partial chunks (.DepotDownloader), and the small bookkeeping
+     * files (installs map + batch plan records). Sign-in, the Room library
+     * cache and user settings are left alone.
+     *
+     * Runs on plain java.io only — no Google services, no special Android
+     * permissions — so it works identically on any Android phone/tablet,
+     * with or without Google support. Returns (freedBytes, deletedItems),
+     * or null when the engine is mid-download (refuse rather than corrupt).
+     */
+    suspend fun purgeAllDownloadedData(): Pair<Long, Int>? = withContext(Dispatchers.IO) {
+        if (_state.value.isEngineActive) return@withContext null
+
+        var freed = 0L
+        var items = 0
+        for (root in libraryRoots()) {
+            val lib = File(root, "SteamLibrary")
+            if (lib.exists()) {
+                freed += lib.walkBottomUp().filter { it.isFile }.map { it.length() }.sum()
+                lib.deleteRecursively()
+                items++
+            }
+        }
+        // installs.json + batches_*.json (+ stale .tmp writers)
+        runCatching {
+            context.filesDir.listFiles { f ->
+                f.isFile && (f.name == INSTALLS_FILE ||
+                    (f.name.startsWith("batches_") && (f.name.endsWith(".json") || f.name.endsWith(".tmp"))) ||
+                    f.name == "$INSTALLS_FILE.tmp")
+            }?.forEach { f ->
+                freed += f.length()
+                f.delete()
+                items++
+            }
+        }
+        restoredRequest = null
+        if (_state.value.phase != SessionPhase.IDLE) _state.value = DownloadSessionState()
+        log(LogLevel.INFO, "Purged all downloaded data: freed ${formatBytes(freed)} across $items item(s).")
+        freed to items
+    }
+
     // ------------------------------------------------------------------
     // Persistent sessions — Steam-style pause / power-off resume
     // ------------------------------------------------------------------
