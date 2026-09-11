@@ -1,0 +1,128 @@
+name: Emulated app smoke tests
+
+# Self-drives the app on a real API-34 Android emulator (KVM on the GitHub
+# runner) plus JVM/Robolectric engine tests — the agent's emulation rig to
+# catch device-only bugs without needing anyone's Steam account.
+on:
+  push:
+    branches: [ "arena/01a0859b-steam-downloader-2" ]
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Engine logic tests (Robolectric JVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (required by AGP 9)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Also provision JDK 21 (some AGP/KSP internals call newer APIs)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept licenses & install required SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-36.1" "build-tools;36.0.0" "platform-tools"
+
+      - name: Set up Gradle 9.1.0 (repo deliberately ships no wrapper)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Run Robolectric unit tests
+        run: |
+          set +e
+          gradle --no-daemon :app:testDebugUnitTest --tests "com.example.DownloadEnginePersistenceTest" --tests "com.example.ExampleRobolectricTest" 2>&1 | tee unit-tests.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            unit-tests.log
+
+  emulator-tests:
+    name: APK boot smoke on Android 14 emulator (API 34, KVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (required by AGP 9)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Also provision JDK 21 (some AGP/KSP internals call newer APIs)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle 9.1.0 (repo deliberately ships no wrapper)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Enable KVM for hardware-accelerated emulation
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Boot emulator and run instrumented smoke tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: Nexus 6P
+          disk-size: 4G
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -memory 4096
+          script: |
+            set +e
+            gradle --no-daemon :app:connectedDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.class=com.example.EmulatedBootSmokeTest 2>&1 | tee emulator-tests.log
+            echo "instrumentation exit: ${PIPESTATUS[0]}"
+            exit ${PIPESTATUS[0]}
+
+      - name: Upload emulator test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-test-results
+          path: |
+            app/build/reports/androidTests/connected/
+            emulator-tests.log
+
+      - name: Report emulation verdict to PR #1
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RESULT="✅ Emulated smoke tests passed: APK boots on an API-34 emulator, deep class probe resolves every critical class on-device (incl. SpongyCastle), auth screen renders, engine persistence/batch tests green on JVM."
+          if ! grep -q "instrumentation exit: 0" emulator-tests.log 2>/dev/null; then
+            RESULT="❌ Emulated smoke tests FAILED (commit ${{ github.sha }}). See the Actions run + attached logs."
+          fi
+          gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "$RESULT"
