@@ -70,12 +70,24 @@ jobs:
             exit 0
           fi
           {
-            echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}). Log tail:'
+            echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}).'
+            echo
+            echo 'Error lines:'
             echo '```'
-            if [ -f unit-tests.log ]; then tail -n 200 unit-tests.log; else echo "(no log captured)"; fi
+            grep -aE "e: |error:|Unresolved|FAILED|Exception" unit-tests.log | head -60
             echo '```'
-          } > pr-comment.md
-          gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+            echo 'Tail:'
+            echo '```'
+            tail -n 80 unit-tests.log
+            echo '```'
+          } > pr-comment.md 2>&1 || true
+          OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            printf '::error title=PR-comment-failed::%s
+' "$(echo "$OUT" | head -c 400)"
+            cat pr-comment.md > /tmp/comment-body.txt || true
+          fi
           exit 0
 
   emulator-tests:
@@ -155,10 +167,21 @@ jobs:
             exit 0
           fi
           {
-            echo '❌ Emulated APK smoke tests FAILED (commit ${{ github.sha }}). Log tail:'
+            echo '❌ Emulated APK smoke tests FAILED (commit ${{ github.sha }}).'
+            echo
+            echo 'Error lines:'
             echo '```'
-            if [ -f emulator-tests.log ]; then tail -n 200 emulator-tests.log; else echo "(no log captured)"; fi
+            grep -aE "e: |error:|Unresolved|FAILED|Error|FAILURES!!!" emulator-tests.log | head -80
             echo '```'
-          } > pr-comment.md
-          gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+            echo 'Tail:'
+            echo '```'
+            tail -n 120 emulator-tests.log
+            echo '```'
+          } > pr-comment.md 2>&1 || true
+          OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            printf '::error title=PR-comment-failed::%s
+' "$(echo "$OUT" | head -c 400)"
+          fi
           exit 0
