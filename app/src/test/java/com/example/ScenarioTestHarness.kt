@@ -2,7 +2,6 @@ package com.example
 
 import androidx.compose.ui.test.SemanticsNodeInteractionsProvider
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.onAllNodes
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
