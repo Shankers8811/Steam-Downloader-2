@@ -1,7 +1,10 @@
 package com.example
 
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsNodeInteractionsProvider
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onRoot
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -31,6 +34,31 @@ object ScenarioTestHarness {
         error("No field '$fieldName' found on ${target.javaClass} (or superclasses)")
     }
 
+    /** Case-insensitive, substring, unmerged-tree text presence. */
+    fun SemanticsNodeInteractionsProvider.anyNodeVisible(
+        text: String,
+        substring: Boolean = true
+    ): Boolean = onAllNodes(
+        hasText(text, substring = substring, ignoreCase = true),
+        useUnmergedTree = true
+    ).fetchSemanticsNodes().isNotEmpty()
+
+    /** Every text currently visible on screen (for self-diagnosing failures:
+     *  failure messages always tell us what WAS rendered, not just what
+     *  wasn't). */
+    fun SemanticsNodeInteractionsProvider.visibleTexts(): List<String> = runCatching {
+        onRoot(useUnmergedTree = true).fetchSemanticsNode().allTexts()
+    }.getOrDefault(listOf("<tree unreadable>"))
+
+    private fun SemanticsNode.allTexts(): List<String> {
+        val mine = runCatching {
+            config[SemanticsProperties.Text]
+                .joinToString(" | ") { annotated -> annotated.text }
+        }.getOrNull()
+        val rest: List<String> = children.flatMap { child -> child.allTexts() }
+        return listOfNotNull(mine) + rest
+    }
+
     /** Polls (up to [timeoutMs]) for the text to appear — Room/coroutine
      *  emissions reach the composition a beat after the test thread proceeds. */
     fun SemanticsNodeInteractionsProvider.awaitVisible(
@@ -44,26 +72,17 @@ object ScenarioTestHarness {
             Thread.sleep(100)
         }
         org.junit.Assert.assertTrue(
-            "Timed out awaiting visible text '$text'",
+            "Timed out awaiting visible text '$text'. Visible now: ${visibleTexts().take(30)}",
             anyNodeVisible(text, substring)
         )
     }
-
-    /** Case-insensitive, substring, unmerged-tree text presence. */
-    fun SemanticsNodeInteractionsProvider.anyNodeVisible(
-        text: String,
-        substring: Boolean = true
-    ): Boolean = onAllNodes(
-        hasText(text, substring = substring, ignoreCase = true),
-        useUnmergedTree = true
-    ).fetchSemanticsNodes().isNotEmpty()
 
     fun SemanticsNodeInteractionsProvider.assertAnyVisible(
         text: String,
         substring: Boolean = true
     ) {
         org.junit.Assert.assertTrue(
-            "Expected any visible node with text containing '$text'",
+            "Expected any visible node with text containing '$text'. Visible now: ${visibleTexts().take(30)}",
             anyNodeVisible(text, substring)
         )
     }
@@ -73,7 +92,7 @@ object ScenarioTestHarness {
         substring: Boolean = true
     ) {
         org.junit.Assert.assertFalse(
-            "Expected NO visible node with text containing '$text'",
+            "Expected NO visible node with text containing '$text'. Visible now: ${visibleTexts().take(30)}",
             anyNodeVisible(text, substring)
         )
     }
