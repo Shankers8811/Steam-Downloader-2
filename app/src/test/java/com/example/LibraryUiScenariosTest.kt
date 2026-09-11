@@ -110,18 +110,17 @@ class LibraryUiScenariosTest {
     fun `populated shelf renders games with the store tabs`() = runBlocking {
         seed(listOf(cs2, gmod))
         showLibrary()
-        // Grid virtualization is real even in a tall test box: the hero card
-        // (most played = Garry's Mod) composes first, remaining capsules only
-        // after scrolling forward — exactly what a human does.
+        // Order matters like a human session: confirm header + hero while at
+        // the top, THEN scroll — the tab row leaves the view when you do.
         composeRule.awaitVisible("Garry's Mod")
+        composeRule.assertAnyVisible("ALL GAMES")
+        composeRule.assertAnyVisible("PLAYED")
+        composeRule.assertAnyVisible("NEVER PLAYED")
         val grid = composeRule.onAllNodes(hasScrollAction(), useUnmergedTree = true)
             .onFirst()
         grid.performScrollToNode(hasText("Counter-Strike 2"))
         composeRule.waitForIdle()
         composeRule.awaitVisible("Counter-Strike 2")
-        composeRule.assertAnyVisible("ALL GAMES")
-        composeRule.assertAnyVisible("PLAYED")
-        composeRule.assertAnyVisible("NEVER PLAYED")
     }
 
     @Test
