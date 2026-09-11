@@ -1,0 +1,139 @@
+name: Android APK (debug)
+
+# Builds a sideload-ready debug APK on every push and PR, and uploads it as a
+# downloadable artifact — no local Android Studio needed to get the APK.
+on:
+  push:
+    branches: [ "main", "arena/01a0859b-steam-downloader-2" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (required by AGP 9)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Also provision JDK 21 (some AGP/KSP internals call newer APIs)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept licenses & install required SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-36.1" "build-tools;36.0.0" "platform-tools"
+
+      - name: Set up Gradle 9.1.0 (repo deliberately ships no wrapper)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Build debug APK
+        run: |
+          set +e
+          gradle --no-daemon :app:assembleDebug 2>&1 | tee build.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Report failure details to the PR (log tail, if any)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "❌ CI build failed on \`${{ github.ref_name }}\` (commit ${{ github.sha }})."
+            echo
+            echo '```text'
+            tail -n 150 build.log
+            echo '```'
+          } > failure-report.md
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file failure-report.md || true
+
+      - name: Upload debug APK artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: depotdownloader-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish APK to apk-builds branch (direct-download channel)
+        if: success() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DIST=$(mktemp -d)
+          cp app/build/outputs/apk/debug/app-debug.apk "$DIST/DepotDownloader-debug.apk"
+          {
+            echo "# DepotDownloader — debug APK"
+            echo
+            echo "**The easiest way to download is the Releases page:**"
+            echo "https://github.com/${{ github.repository }}/releases/latest"
+            echo
+            echo "ℹ️ If GitHub shows \"Sorry about that, but we can't show files that are"
+            echo "this big right now\" — that is NORMAL for a 30MB APK. Click the **Raw**"
+            echo "button at the top-right of that page to download the file."
+            echo
+            echo "Auto-built by the Android APK (debug) workflow."
+            echo "Workflow run: ${{ github.run_id }}"
+            echo "Commit: ${{ github.sha }}"
+            echo
+            echo "SHA256:"
+            sha256sum "$DIST/DepotDownloader-debug.apk"
+          } > "$DIST/README.md"
+          cd "$DIST"
+          git init -q
+          git config user.name "arena-ci[bot]"
+          git config user.email "arena-ci[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git checkout -q -b apk-builds
+          git add DepotDownloader-debug.apk README.md
+          git commit -q -m "DepotDownloader debug APK — run ${{ github.run_id }}" || true
+          git push --force origin apk-builds
+
+      - name: Publish APK to a GitHub Release (clean download page)
+        if: success() && github.event_name != 'pull_request'
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk DepotDownloader-debug.apk
+          sha256sum DepotDownloader-debug.apk > SHA256SUMS.txt
+      - name: Create/update the debug release
+        if: success() && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-apk
+          name: DepotDownloader — Debug APK (auto build)
+          prerelease: false
+          draft: false
+          files: |
+            DepotDownloader-debug.apk
+            SHA256SUMS.txt
+          body: |
+            ## DepotDownloader — Debug APK (auto build)
+
+            **To install on any Android phone:**
+            1. Download `DepotDownloader-debug.apk` below (on the phone itself is fastest).
+            2. Open the downloaded file → allow *Install unknown apps* if asked → **Install**.
+            3. Open the app → sign in with your Steam account (2FA supported).
+
+            This APK is re-built automatically on every change and always overwrites
+            this release — it is unsigned for production (debug-signed), which is why
+            Android shows a one-time "unknown source" warning.
+
+            Build provenance: workflow run `${{ github.run_id }}`, commit `${{ github.sha }}`.
+            Verify the download with `SHA256SUMS.txt` if you want to be thorough.

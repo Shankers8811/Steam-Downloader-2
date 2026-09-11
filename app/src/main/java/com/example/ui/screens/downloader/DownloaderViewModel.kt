@@ -1,117 +1,235 @@
 package com.example.ui.screens.downloader
 
 import android.app.Application
-import android.net.Uri
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.db.AppDatabase
+import com.example.DepotApplication
+import com.example.data.auth.AuthState
 import com.example.data.db.DownloadTaskEntity
+import com.example.data.download.DownloadRequest
+import com.example.data.download.DownloadSessionState
+import com.example.data.download.SessionPhase
 import com.example.data.model.DlcMode
-import com.example.data.repository.UserPreferencesRepository
-import com.example.bridge.BridgeState
-import com.example.bridge.DepotDownloaderBridge
+import com.example.service.DownloadForegroundService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/**
+ * Owns the download configuration form and delegates execution to the
+ * app-scoped [DepotDownloadManager] — the engine survives the UI, so pausing,
+ * leaving the screen or rotating the phone never breaks a download.
+ */
 class DownloaderViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val db = AppDatabase.getDatabase(application)
-    private val prefsRepo = UserPreferencesRepository(application)
-    val bridge = DepotDownloaderBridge(application)
+    private val services = DepotApplication.get(application)
+    private val manager = services.downloadManager
+    private val authManager = services.authManager
 
-    // Credentials (In-memory raw state)
-    val steamUsername: StateFlow<String> = prefsRepo.steamUsername
-    private val _usernameInput = MutableStateFlow(prefsRepo.steamUsername.value)
-    val usernameInput: StateFlow<String> = _usernameInput.asStateFlow()
+    val sessionState: StateFlow<DownloadSessionState> = manager.state
 
-    private val _passwordInput = MutableStateFlow("") // Strictly in-memory, never persisted!
-    val passwordInput: StateFlow<String> = _passwordInput.asStateFlow()
+    val accountName: StateFlow<String> = services.prefs.steamUsername
 
-    private val _twoFactorInput = MutableStateFlow("")
-    val twoFactorInput: StateFlow<String> = _twoFactorInput.asStateFlow()
+    /** Everything this account owns (the same native inventory the library
+     *  shows) — the Downloader ONLY downloads items from this list. */
+    private val steamRepo = services.steamRepository
+    val ownedGames: StateFlow<List<com.example.data.db.SteamGameEntity>> = steamRepo.allGames
+        .stateIn(
+            scope = viewModelScope,
+            started = kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000L),
+            initialValue = emptyList()
+        )
 
-    // Download Configuration
-    private val _appIdInput = MutableStateFlow("400") // Default Portal 1 App ID
+    /** The real, on-disk install root (works as a real path for the native
+     *  downloader AND shows up over USB MTP — SAF tree-URIs don't). */
+    val installRootDisplay: StateFlow<String> =
+        MutableStateFlow(manager.installRootDisplay).asStateFlow()
+
+    // ---------------- Download configuration inputs ----------------
+
+    private val _appIdInput = MutableStateFlow("")
     val appIdInput: StateFlow<String> = _appIdInput.asStateFlow()
 
-    private val _appNameInput = MutableStateFlow("Portal")
+    private val _appNameInput = MutableStateFlow("")
     val appNameInput: StateFlow<String> = _appNameInput.asStateFlow()
 
     private val _depotIdsInput = MutableStateFlow("")
     val depotIdsInput: StateFlow<String> = _depotIdsInput.asStateFlow()
 
-    private val _manifestIdInput = MutableStateFlow("")
-    val manifestIdInput: StateFlow<String> = _manifestIdInput.asStateFlow()
-
     private val _branchInput = MutableStateFlow("public")
     val branchInput: StateFlow<String> = _branchInput.asStateFlow()
 
-    // DLC Configuration
-    private val _includeDlc = MutableStateFlow(false)
+    private val _includeDlc = MutableStateFlow(true)
     val includeDlc: StateFlow<Boolean> = _includeDlc.asStateFlow()
 
-    private val _dlcDepotId = MutableStateFlow("")
-    val dlcDepotId: StateFlow<String> = _dlcDepotId.asStateFlow()
-
-    private val _dlcMode = MutableStateFlow(DlcMode.BASE_ONLY)
+    private val _dlcMode = MutableStateFlow(DlcMode.BASE_AND_DLC)
     val dlcMode: StateFlow<DlcMode> = _dlcMode.asStateFlow()
-
-    // Storage Management (SAF)
-    val targetUri: StateFlow<String> = prefsRepo.targetUri
-    val targetDisplayPath: StateFlow<String> = prefsRepo.targetDisplayPath
-
-    // Bridge State
-    val bridgeState: StateFlow<BridgeState> = bridge.state
 
     private val _statusNotification = MutableStateFlow<String?>(null)
     val statusNotification: StateFlow<String?> = _statusNotification.asStateFlow()
 
-    fun onUsernameChanged(value: String) {
-        _usernameInput.value = value
-        prefsRepo.saveSteamUsername(value)
+    /** PC-transfer batch state for the selected/running app (storage rescue). */
+    private val _batchSummary = MutableStateFlow<com.example.data.download.DepotDownloadManager.BatchSummary?>(null)
+    val batchSummary: StateFlow<com.example.data.download.DepotDownloadManager.BatchSummary?> =
+        _batchSummary.asStateFlow()
+
+    /** Re-reads the batch record for the app currently selected or running. */
+    fun refreshBatchSummary() {
+        val appId = sessionState.value.appId.takeIf { it != 0 }
+            ?: _appIdInput.value.toIntOrNull() ?: run {
+            _batchSummary.value = null
+            return
+        }
+        _batchSummary.value = manager.getBatchSummary(appId)
     }
 
-    fun onPasswordChanged(value: String) {
-        _passwordInput.value = value
+    /**
+     * Fills the depot-IDs input with a greedy "next balance" plan that fits
+     * [targetGb] gigabytes (defaults to ~90% of free space when 0 / blank).
+     */
+    fun planNextBatch(targetGb: String) {
+        val appId = sessionState.value.appId.takeIf { it != 0 }
+            ?: _appIdInput.value.toIntOrNull() ?: return
+        val parsedGb = targetGb.replace(',', '.').toDoubleOrNull() ?: 0.0
+        val targetBytes = if (parsedGb > 0.0) {
+            (parsedGb * 1024.0 * 1024.0 * 1024.0).toLong()
+        } else {
+            ((manager.storageInfo().first) * 9L) / 10L // 90% of free space
+        }
+        val suggestion = manager.suggestNextBatch(appId, targetBytes)
+        if (suggestion == null) {
+            _statusNotification.value = "Nothing left — all depots of app $appId are already on your PC."
+            refreshBatchSummary()
+            return
+        }
+        val (ids, bytes, remaining) = suggestion
+        _depotIdsInput.value = ids.joinToString(", ")
+        _statusNotification.value =
+            "Batch plan ready: ${ids.size} of $remaining remaining depot(s), ~${com.example.ui.util.FormatUtils.formatBytes(bytes)}. Press START DOWNLOAD."
+        refreshBatchSummary()
     }
 
-    fun onTwoFactorChanged(value: String) {
-        _twoFactorInput.value = value
+    /** After copying the completed batch to the PC: record as moved + free space. */
+    fun markBatchMovedAndPurge() {
+        if (manager.markBatchMovedAndPurge()) {
+            _statusNotification.value =
+                "Batch marked as moved — local copy deleted. Pick the game again and PLAN the next batch."
+        } else {
+            _statusNotification.value = "No completed batch to mark — finish a download first."
+        }
+        refreshBatchSummary()
     }
 
-    fun onAppIdChanged(value: String) {
-        _appIdInput.value = value
-    }
+    /** Room row tracking the active session for download history. */
+    private var historyTaskId: Int? = null
 
-    fun onAppNameChanged(value: String) {
-        _appNameInput.value = value
-    }
+    init {
+        // Keep the Room history row in sync with engine state transitions.
+        viewModelScope.launch {
+            sessionState.collect { state ->
+                if (state.appId == 0) {
+                    if (lastSummaryPhase != SessionPhase.IDLE) {
+                        lastSummaryPhase = SessionPhase.IDLE
+                        refreshBatchSummary()
+                    }
+                    return@collect
+                }
+                val previous = sessionStatePhaseTracker
+                sessionStatePhaseTracker = state.phase
+                if (state.phase != lastSummaryPhase) {
+                    lastSummaryPhase = state.phase
+                    refreshBatchSummary()
+                }
+                if (previous == state.phase && state.progressPercent < 100f) return@collect
+                upsertHistoryTask(state)
+            }
+        }
 
-    fun onDepotIdsChanged(value: String) {
-        _depotIdsInput.value = value
-    }
-
-    fun onManifestIdChanged(value: String) {
-        _manifestIdInput.value = value
-    }
-
-    fun onBranchChanged(value: String) {
-        _branchInput.value = value
-    }
-
-    fun onIncludeDlcChanged(enabled: Boolean) {
-        _includeDlc.value = enabled
-        if (!enabled) {
-            _dlcMode.value = DlcMode.BASE_ONLY
-        } else if (_dlcMode.value == DlcMode.BASE_ONLY) {
-            _dlcMode.value = DlcMode.BASE_AND_DLC
+        // Steam-style durability: pick up a checkpointed session from disk the
+        // moment the ViewModel is created (survives app exit / power-off), then
+        // continue it automatically when the user did NOT explicitly pause —
+        // exactly like Steam on Windows after a restart.
+        viewModelScope.launch {
+            val restored = manager.restorePersistedSession() ?: return@launch
+            _appIdInput.value = restored.appId.toString()
+            _appNameInput.value = restored.appName
+            _branchInput.value = restored.branch.ifBlank { "public" }
+            _depotIdsInput.value = restored.depotIds
+            _dlcMode.value = restored.dlcMode
+            if (manager.restoredPausedExplicitly) {
+                _statusNotification.value =
+                    "Paused download restored: \"${restored.appName}\" — RESUME continues from the exact checkpoint."
+                return@launch
+            }
+            val deadline = System.currentTimeMillis() + 30_000L
+            while (authManager.authState.value !is AuthState.LoggedIn &&
+                System.currentTimeMillis() < deadline
+            ) {
+                delay(400)
+            }
+            if (authManager.authState.value is AuthState.LoggedIn &&
+                manager.restoredRequest != null &&
+                !sessionState.value.isEngineActive
+            ) {
+                _statusNotification.value =
+                    "Continuing \"${restored.appName}\" from its checkpoint — Steam-style resume."
+                manager.resume { authManager.getValidAccessToken() }
+                startForegroundServiceSafely()
+            } else {
+                _statusNotification.value =
+                    "\"${restored.appName}\" is checkpointed — sign in and hit RESUME to continue."
+            }
         }
     }
 
-    fun onDlcDepotIdChanged(value: String) {
-        _dlcDepotId.value = value
+    private var sessionStatePhaseTracker: SessionPhase = SessionPhase.IDLE
+    private var lastSummaryPhase: SessionPhase? = null
+
+    private suspend fun upsertHistoryTask(state: DownloadSessionState) {
+        val status = when (state.phase) {
+            SessionPhase.DOWNLOADING, SessionPhase.VALIDATING_LICENSE,
+            SessionPhase.ALLOCATING, SessionPhase.VERIFYING -> "DOWNLOADING"
+            SessionPhase.PAUSED -> "PAUSED"
+            SessionPhase.COMPLETED -> "COMPLETED"
+            SessionPhase.FAILED -> "FAILED"
+            SessionPhase.CANCELLED -> "CANCELLED"
+            SessionPhase.IDLE -> return
+        }
+        val dao = services.database.downloadTaskDao()
+        val existing = historyTaskId?.let { dao.getTaskById(it) }
+        val entity = (existing ?: DownloadTaskEntity(appId = state.appId, appName = state.appName)).copy(
+            appId = state.appId,
+            appName = state.appName,
+            branch = state.branch,
+            targetUriString = "",
+            targetPathDisplay = state.outputDisplay,
+            status = status,
+            progressPercent = state.progressPercent,
+            downloadSpeed = "%.1f MB/s".format(state.networkBytesPerSec / (1024.0 * 1024.0)),
+            downloadedBytes = state.downloadedBytes,
+            totalBytes = state.totalBytes,
+            totalSizeFormatted = com.example.data.download.DepotDownloadManager.formatBytes(state.totalBytes),
+            timestamp = System.currentTimeMillis()
+        )
+        val id = dao.insertTask(entity).toInt()
+        if (historyTaskId == null && entity.id == 0) historyTaskId = id
+    }
+
+    // ---------------- Input handlers ----------------
+
+    fun onAppIdChanged(value: String) { _appIdInput.value = value }
+    fun onAppNameChanged(value: String) { _appNameInput.value = value }
+    fun onDepotIdsChanged(value: String) { _depotIdsInput.value = value }
+    fun onBranchChanged(value: String) { _branchInput.value = value }
+
+    fun onIncludeDlcChanged(enabled: Boolean) {
+        _includeDlc.value = enabled
+        _dlcMode.value = if (enabled) DlcMode.BASE_AND_DLC else DlcMode.BASE_ONLY
     }
 
     fun onDlcModeChanged(mode: DlcMode) {
@@ -119,93 +237,139 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
         _includeDlc.value = mode != DlcMode.BASE_ONLY
     }
 
-    fun setTargetDirectory(uri: Uri, displayPath: String) {
-        prefsRepo.saveTargetDirectory(uri.toString(), displayPath)
-        _statusNotification.value = "Storage Location updated: $displayPath"
-    }
+    /** The install location is fixed (real filesystem path, USB-visible). */
+    fun describeInstallLocation(): String =
+        "Installs to a real folder so the native Steam engine can write directly: " +
+            manager.installRootDisplay + " — visible to your PC over USB (Android/data). " +
+            "SAF tree picking was removed: document-provider URIs are not real paths " +
+            "and silently break native file writers."
 
     fun prefillFromLibrary(appId: Int, gameName: String) {
         _appIdInput.value = appId.toString()
         _appNameInput.value = gameName
-        _statusNotification.value = "Pre-filled App ID $appId ($gameName)"
+        refreshBatchSummary()
+        _statusNotification.value = "Pre-filled $gameName (app $appId) — press Start to validate licenses & download."
     }
 
+    // ---------------- Engine controls ----------------
+
     fun startDownloadTask() {
-        val appIdInt = _appIdInput.value.toIntOrNull()
-        if (appIdInt == null || appIdInt <= 0) {
-            _statusNotification.value = "Please enter a valid Steam App ID."
+        val appId = _appIdInput.value.toIntOrNull()
+        if (appId == null || appId <= 0) {
+            _statusNotification.value = "Enter a valid Steam App ID first."
+            return
+        }
+        if (authManager.session.value == null) {
+            _statusNotification.value = "Sign in with Steam first — licenses can only be validated with an active session."
+            return
+        }
+        if (manager.state.value.isEngineActive || manager.state.value.phase == SessionPhase.PAUSED) {
+            _statusNotification.value = "A session is already active — pause or cancel it first."
             return
         }
 
-        val task = DownloadTaskEntity(
-            appId = appIdInt,
-            appName = _appNameInput.value.ifBlank { "App $appIdInt" },
-            depotIds = _depotIdsInput.value,
-            manifestId = _manifestIdInput.value,
-            branch = _branchInput.value.ifBlank { "public" },
-            dlcMode = _dlcMode.value.name,
-            dlcDepotId = _dlcDepotId.value,
-            includeDlc = _includeDlc.value,
-            targetUriString = targetUri.value,
-            targetPathDisplay = targetDisplayPath.value,
-            status = "DOWNLOADING"
-        )
-
+        // Store rule: only items on THIS account may be downloaded. The
+        // license set comes from the CM connection (same source the library
+        // and the DLC page use) — anything not there is rejected up front,
+        // exactly like the store hiding Install buttons for non-owners.
         viewModelScope.launch {
-            db.downloadTaskDao().insertTask(task)
-            bridge.startDownload(
-                task = task,
-                username = _usernameInput.value,
-                password = _passwordInput.value,
-                twoFactorCode = _twoFactorInput.value,
-                onProgressUpdate = { updatedTask ->
-                    viewModelScope.launch { db.downloadTaskDao().updateTask(updatedTask) }
-                },
-                onComplete = { success, msg ->
-                    _statusNotification.value = if (success) "Download finished!" else "Failed: $msg"
-                }
-            )
+            val licensed = try {
+                services.steamRuntime.getLicensedAppIds()
+            } catch (e: Exception) {
+                null
+            } catch (t: Throwable) {
+                com.example.CrashLog.record("ownership guard", t)
+                null
+            }
+            if (licensed == null) {
+                _statusNotification.value =
+                    "Couldn't verify ownership right now — open the Library once so the license scan runs, then retry."
+                return@launch
+            }
+            if (!licensed.contains(appId)) {
+                _statusNotification.value =
+                    "App $appId is not on your account — like the Steam store, you can only download what you own."
+                return@launch
+            }
+
+            historyTaskId = null
+            sessionStatePhaseTracker = SessionPhase.IDLE
+
+            // CM health before engine start: the ownership cache above can
+            // answer from disk while the socket is dead — heal the session
+            // right here so the human never meets a spurious "not signed in"
+            // engine failure. Auto re-logon uses the remembered CM creds.
+            services.steamRuntime.connect()
+            if (!services.steamRuntime.waitLoggedOn(30_000L)) {
+                _statusNotification.value =
+                    "Steam servers are unreachable right now — retry in a few seconds."
+                return@launch
+            }
+
+            manager.start(
+                DownloadRequest(
+                    appId = appId,
+                    appName = _appNameInput.value.ifBlank { "App $appId" },
+                    branch = _branchInput.value.ifBlank { "public" },
+                    dlcMode = _dlcMode.value,
+                    depotIds = _depotIdsInput.value,
+                    dlcDepotId = ""
+                )
+            ) { authManager.getValidAccessToken() }
+
+            startForegroundServiceSafely()
         }
     }
 
     fun pauseDownload() {
-        bridge.pauseDownload()
-        _statusNotification.value = "Download paused. Partial files preserved."
+        manager.pause()
+        _statusNotification.value = "Pausing at the next chunk boundary…"
     }
 
     fun resumeDownload() {
-        val appIdInt = _appIdInput.value.toIntOrNull() ?: 400
-        val task = DownloadTaskEntity(
-            appId = appIdInt,
-            appName = _appNameInput.value.ifBlank { "App $appIdInt" },
-            depotIds = _depotIdsInput.value,
-            manifestId = _manifestIdInput.value,
-            branch = _branchInput.value.ifBlank { "public" },
-            dlcMode = _dlcMode.value.name,
-            dlcDepotId = _dlcDepotId.value,
-            includeDlc = _includeDlc.value,
-            targetUriString = targetUri.value,
-            targetPathDisplay = targetDisplayPath.value,
-            status = "DOWNLOADING",
-            progressPercent = bridgeState.value.progressPercent
-        )
-        bridge.resumeDownload(
-            task = task,
-            username = _usernameInput.value,
-            password = _passwordInput.value,
-            twoFactorCode = _twoFactorInput.value,
-            onProgressUpdate = { updatedTask ->
-                viewModelScope.launch { db.downloadTaskDao().updateTask(updatedTask) }
-            },
-            onComplete = { success, msg ->
-                _statusNotification.value = if (success) "Download finished!" else "Failed: $msg"
-            }
-        )
+        manager.resume { authManager.getValidAccessToken() }
+        startForegroundServiceSafely()
     }
 
     fun cancelDownload() {
-        bridge.cancelDownload()
-        _statusNotification.value = "Download cancelled."
+        manager.cancel()
+    }
+
+    fun clearPartialData() {
+        val appId = sessionState.value.appId.takeIf { it != 0 } ?: _appIdInput.value.toIntOrNull() ?: return
+        manager.clearStaging(appId)
+        historyTaskId = null
+        _statusNotification.value = "Staged partial data for app $appId cleared."
+    }
+
+    /** One-tap purge: remove every downloaded file from this device
+     *  (games, partial chunks, batch/transfer bookkeeping). Works fully
+     *  offline on any Android phone/tablet, no Google services involved.
+     *  Refuses while the engine is mid-download rather than corrupt files. */
+    fun deleteAllDownloadedFiles() {
+        viewModelScope.launch {
+            when (val result = manager.purgeAllDownloadedData()) {
+                null ->
+                    _statusNotification.value =
+                        "A download is running — cancel it first, then delete everything."
+                else -> {
+                    val (freed, items) = result
+                    _statusNotification.value =
+                        "All downloaded files deleted — freed ${com.example.ui.util.FormatUtils.formatBytes(freed)} across $items item(s). Account & library untouched."
+                }
+            }
+        }
+    }
+
+    private fun startForegroundServiceSafely() {
+        try {
+            val intent = Intent(getApplication(), DownloadForegroundService::class.java)
+                .setAction(DownloadForegroundService.ACTION_START)
+            ContextCompat.startForegroundService(getApplication(), intent)
+        } catch (e: Exception) {
+            // Notification permission denied / FGS restrictions — the engine
+            // keeps running in-process anyway, so the download is unaffected.
+        }
     }
 
     fun clearNotification() {
