@@ -41,6 +41,13 @@ if [ $GR -ne 0 ]; then echo "INSTRUMENTATION_FAIL assemble"; exit 1; fi
 
 echo "== create AVD =="
 AVD_NAME="arena_api34"
+# Pin the AVD home explicitly BEFORE creation: avdmanager picks its home from
+# ANDROID_AVD_HOME / ANDROID_SDK_HOME / $HOME and on this runner image it
+# silently chooses something other than $HOME/.android (creation "succeeds"
+# with rc=0 yet writes nothing where anyone expects). A pinned, pre-created
+# ANDROID_AVD_HOME removes the ambiguity for both avdmanager and the emulator.
+export ANDROID_AVD_HOME="$HOME/.android/avd"
+mkdir -p "$ANDROID_AVD_HOME"
 "$AVDMGR" delete avd -n "$AVD_NAME" >/dev/null 2>&1 || true
 echo "no" | "$AVDMGR" create avd -n "$AVD_NAME" \
   -k "system-images;android-34;google_apis;x86_64" \
@@ -49,10 +56,10 @@ CR=$?
 echo "avdmanager rc=$CR"
 [ $CR -ne 0 ] && { echo "INSTRUMENTATION_FAIL avd"; exit 1; }
 echo "== locate avd files =="
-ls -la "$HOME/.android/avd" || true
-find "$HOME/.android" /usr/local/lib/android/sdk/avd -maxdepth 2 -name "${AVD_NAME}.ini" 2>/dev/null || true
+ls -la "$ANDROID_AVD_HOME" || true
+find "$HOME/.android" /usr/local/lib/android/sdk -maxdepth 3 -name "${AVD_NAME}.ini" 2>/dev/null || true
 # Wherever the ini actually landed, point the emulator at that directory.
-INI="$(find "$HOME/.android" /usr/local/lib/android/sdk/avd -maxdepth 2 -name "${AVD_NAME}.ini" 2>/dev/null | head -1)"
+INI="$(find "$ANDROID_AVD_HOME" "$HOME/.android" /usr/local/lib/android/sdk -maxdepth 3 -name "${AVD_NAME}.ini" 2>/dev/null | head -1)"
 if [ -z "$INI" ]; then
   echo "INSTRUMENTATION_FAIL avd-ini-missing"
   exit 1
