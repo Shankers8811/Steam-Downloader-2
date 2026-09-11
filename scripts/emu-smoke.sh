@@ -12,7 +12,22 @@ gradle --version 2>&1 | head -4 || echo "gradle missing!"
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 EMU="$SDK/emulator/emulator"
 ADB="$SDK/platform-tools/adb"
-AVDMGR="$SDK/cmdline-tools/latest/bin/avdmanager"
+# Multiple cmdline-tools trees can coexist on the runner. Prefer latest-2 (the
+# copy this job installs): the runner's stock 'latest' binary only understands
+# SDK XML v3 and silently fails AVD creation against modern system images.
+AVDMGR=""
+for p in "$SDK/cmdline-tools/latest-2/bin/avdmanager" \
+         "$SDK/cmdline-tools/latest/bin/avdmanager" \
+         "$SDK/tools/bin/avdmanager"; do
+  if [ -x "$p" ]; then AVDMGR="$p"; break; fi
+done
+if [ -z "$AVDMGR" ]; then
+  echo "INSTRUMENTATION_FAIL no-avdmanager"
+  ls "$SDK/cmdline-tools" 2>/dev/null
+  exit 1
+fi
+echo "AVDMGR=$AVDMGR"
+echo "HOME=$HOME ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-unset} ANDROID_SDK_HOME=${ANDROID_SDK_HOME:-unset}"
 
 echo "== sdk tree =="
 ls "$SDK" || true
@@ -29,10 +44,22 @@ AVD_NAME="arena_api34"
 "$AVDMGR" delete avd -n "$AVD_NAME" >/dev/null 2>&1 || true
 echo "no" | "$AVDMGR" create avd -n "$AVD_NAME" \
   -k "system-images;android-34;google_apis;x86_64" \
-  -d "pixel_6" --force
+  --force
 CR=$?
 echo "avdmanager rc=$CR"
 [ $CR -ne 0 ] && { echo "INSTRUMENTATION_FAIL avd"; exit 1; }
+echo "== locate avd files =="
+ls -la "$HOME/.android/avd" || true
+find "$HOME/.android" /usr/local/lib/android/sdk/avd -maxdepth 2 -name "${AVD_NAME}.ini" 2>/dev/null || true
+# Wherever the ini actually landed, point the emulator at that directory.
+INI="$(find "$HOME/.android" /usr/local/lib/android/sdk/avd -maxdepth 2 -name "${AVD_NAME}.ini" 2>/dev/null | head -1)"
+if [ -z "$INI" ]; then
+  echo "INSTRUMENTATION_FAIL avd-ini-missing"
+  exit 1
+fi
+export ANDROID_AVD_HOME="$(dirname "$INI")"
+echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
+"$EMU" -list-avds || true
 
 echo "== boot emulator =="
 "$EMU" -avd "$AVD_NAME" -no-window -no-snapshot -no-audio -no-boot-anim \
