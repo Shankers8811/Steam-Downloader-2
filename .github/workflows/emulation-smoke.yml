@@ -65,13 +65,21 @@ jobs:
           {
             echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}).'
             echo
+            echo 'Failure messages from the test reports:'
+            echo '```'
+            grep -l '<failure' app/build/test-results/testDebugUnitTest/*.xml 2>/dev/null | head -6 | while read f; do
+              echo "---- $f"
+              grep -oaE 'message="[^"]{0,600}' "$f" | head -4 | sed 's/^message="//'
+              echo
+            done
+            echo '```'
             echo 'Failures and error lines:'
             echo '```'
-            grep -aE "FAILED$|e: |error:|AssertionError|expected|Exception" unit-tests.log | head -60
+            grep -aE "FAILED$|e: |error:|AssertionError|expected|Exception" unit-tests.log | head -40
             echo '```'
             echo 'Tail:'
             echo '```'
-            tail -n 60 unit-tests.log
+            tail -n 40 unit-tests.log
             echo '```'
           } > pr-comment.md 2>&1 || true
           OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
