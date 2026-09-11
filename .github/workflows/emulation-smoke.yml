@@ -64,17 +64,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if grep -qE "BUILD SUCCESSFUL" unit-tests.log; then
+          set +e
+          if [ -f unit-tests.log ] && grep -qE "BUILD SUCCESSFUL" unit-tests.log; then
             gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Robolectric engine tests passed (commit ${{ github.sha }})."
-          else
-            {
-              echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}). Log tail:'
-              echo '```'
-              tail -n 220 unit-tests.log
-              echo '```'
-            } > pr-comment.md
-            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+            exit 0
           fi
+          {
+            echo '❌ Robolectric engine tests failed (commit ${{ github.sha }}). Log tail:'
+            echo '```'
+            if [ -f unit-tests.log ]; then tail -n 200 unit-tests.log; else echo "(no log captured)"; fi
+            echo '```'
+          } > pr-comment.md
+          gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+          exit 0
 
   emulator-tests:
     name: APK boot smoke on Android 14 emulator (API 34, KVM)
@@ -141,14 +143,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if grep -q "instrumentation exit: 0" emulator-tests.log 2>/dev/null; then
-            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Emulated APK smoke tests passed on API-34 emulator (commit ${{ github.sha }}): APK boots, deep class probe finds all critical classes on-device (incl. SpongyCastle), auth screen renders."
-          else
+          set +e
+          if [ -f emulator-tests.log ] && grep -q "instrumentation exit: 0" emulator-tests.log; then
+            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Emulated APK smoke tests passed on API-34 emulator (commit ${{ github.sha }}). Log excerpt:"
             {
-              echo '❌ Emulated APK smoke tests FAILED (commit ${{ github.sha }}). Log tail:'
               echo '```'
-              tail -n 220 emulator-tests.log 2>/dev/null
+              grep -E "BUILD SUCCESSFUL|PASSED|OK    |tests? (completed|finished)" emulator-tests.log | tail -n 30
               echo '```'
             } > pr-comment.md
             gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+            exit 0
           fi
+          {
+            echo '❌ Emulated APK smoke tests FAILED (commit ${{ github.sha }}). Log tail:'
+            echo '```'
+            if [ -f emulator-tests.log ]; then tail -n 200 emulator-tests.log; else echo "(no log captured)"; fi
+            echo '```'
+          } > pr-comment.md
+          gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+          exit 0
