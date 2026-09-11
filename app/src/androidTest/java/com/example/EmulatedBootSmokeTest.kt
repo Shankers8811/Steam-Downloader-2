@@ -77,11 +77,13 @@ class EmulatedBootSmokeTest {
     }
 
     private fun SemanticsNode.allTexts(): List<String> {
-        val mine = runCatching {
-            config.getOrNull(SemanticsProperties.Text)
-                ?.joinToString(" | ") { it.text }
+        // config.getOrNull doesn't exist; the subscript operator throws on a
+        // missing key, so guard it instead.
+        val mine: String? = runCatching {
+            config[SemanticsProperties.Text]
+                .joinToString(" | ") { annotated -> annotated.text }
         }.getOrNull()
-        val rest = children.flatMap { it.allTexts() }
+        val rest: List<String> = children.flatMap { child -> child.allTexts() }
         return listOfNotNull(mine) + rest
     }
 }
