@@ -4,6 +4,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import java.io.File
 import com.example.ScenarioTestHarness.awaitVisible
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
@@ -189,8 +190,10 @@ class DownloaderUiScenariosTest {
         val files = seedDownloadedFiles()
         showDownloader(stateFor(SessionPhase.IDLE))
         composeRule.onNodeWithTag("delete_all_downloads", useUnmergedTree = true)
+            .performScrollTo()
             .performClick()
         composeRule.waitForIdle()
+        composeRule.awaitVisible("Delete all downloaded files?")
         composeRule.assertAnyVisible("Delete all downloaded files?")
         composeRule.assertAnyVisible("Your Steam sign-in and library stay untouched")
         composeRule.onNodeWithTag("confirm_delete_all", useUnmergedTree = true)
@@ -206,8 +209,10 @@ class DownloaderUiScenariosTest {
         val files = seedDownloadedFiles()
         showDownloader(stateFor(SessionPhase.IDLE))
         composeRule.onNodeWithTag("delete_all_downloads", useUnmergedTree = true)
+            .performScrollTo()
             .performClick()
         composeRule.waitForIdle()
+        composeRule.awaitVisible("Delete all downloaded files?")
         composeRule.onNodeWithTag("cancel_delete_all", useUnmergedTree = true)
             .performClick()
         composeRule.waitForIdle()
