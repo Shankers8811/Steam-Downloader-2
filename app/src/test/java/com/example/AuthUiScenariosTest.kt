@@ -51,7 +51,9 @@ class AuthUiScenariosTest {
         pollIntervalSec = 5L,
         guardType = guardType,
         promptMessage = SteamGuardType.defaultPrompt(guardType),
-        availableTypes = listOf(guardType),
+        availableTypes = if (guardType == SteamGuardType.DEVICE_CONFIRMATION)
+            listOf(guardType, SteamGuardType.EMAIL_CODE, SteamGuardType.DEVICE_CODE)
+        else listOf(guardType),
         rememberMe = true,
         showCodeField = showCodeField
     )
@@ -171,7 +173,8 @@ class AuthUiScenariosTest {
         vm.cancelSignIn()
         assert(app.authManager.authState.value is AuthState.LoggedOut)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("sign_in_button", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.assertAnyVisible("Steam account name")
+        composeRule.assertAnyVisible("Password")
         composeRule.assertNoneVisible("XXXXX")
     }
 

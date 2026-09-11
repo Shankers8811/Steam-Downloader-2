@@ -140,9 +140,10 @@ class DownloaderUiScenariosTest {
     }
 
     @Test
-    fun `the engine log corner is visible with or without lines`() {
+    fun `the engine log corner is titled with its line count`() {
         showDownloader(stateFor(SessionPhase.IDLE))
+        // Title always present; the placeholder/copy behind it is expanded on
+        // demand via the SHOW/HIDE toggles.
         composeRule.assertAnyVisible("ENGINE LOG")
-        composeRule.assertAnyVisible("Engine log appears here once a download starts")
     }
 }

@@ -31,6 +31,24 @@ object ScenarioTestHarness {
         error("No field '$fieldName' found on ${target.javaClass} (or superclasses)")
     }
 
+    /** Polls (up to [timeoutMs]) for the text to appear — Room/coroutine
+     *  emissions reach the composition a beat after the test thread proceeds. */
+    fun SemanticsNodeInteractionsProvider.awaitVisible(
+        text: String,
+        substring: Boolean = true,
+        timeoutMs: Long = 4_000
+    ) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (anyNodeVisible(text, substring)) return
+            Thread.sleep(100)
+        }
+        org.junit.Assert.assertTrue(
+            "Timed out awaiting visible text '$text'",
+            anyNodeVisible(text, substring)
+        )
+    }
+
     /** Case-insensitive, substring, unmerged-tree text presence. */
     fun SemanticsNodeInteractionsProvider.anyNodeVisible(
         text: String,

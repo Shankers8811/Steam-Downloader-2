@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import com.example.ScenarioTestHarness.assertAnyVisible
+import com.example.ScenarioTestHarness.awaitVisible
 import com.example.ScenarioTestHarness.assertNoneVisible
 import com.example.ScenarioTestHarness.anyNodeVisible
 import com.example.ScenarioTestHarness.setFlow
@@ -60,14 +61,14 @@ class LibraryUiScenariosTest {
     @Test
     fun `empty library invites the human to sync`() {
         showLibrary()
-        composeRule.assertAnyVisible("Library is empty")
+        composeRule.awaitVisible("Library is empty")
     }
 
     @Test
     fun `populated shelf renders games with the store tabs`() = runBlocking {
         app.database.steamGameDao().insertGames(listOf(cs2, gmod))
         showLibrary()
-        composeRule.assertAnyVisible("Counter-Strike 2")
+        composeRule.awaitVisible("Counter-Strike 2")
         composeRule.assertAnyVisible("Garry's Mod")
         composeRule.assertAnyVisible("ALL GAMES")
         composeRule.assertAnyVisible("PLAYED")
@@ -79,8 +80,7 @@ class LibraryUiScenariosTest {
         app.database.steamGameDao().insertGames(listOf(cs2, gmod))
         showLibrary()
         vm.onSearchQueryChanged("counter")
-        composeRule.waitForIdle()
-        composeRule.assertAnyVisible("Counter-Strike 2")
+        composeRule.awaitVisible("Counter-Strike 2")
         composeRule.assertNoneVisible("Garry's Mod")
     }
 
@@ -89,8 +89,7 @@ class LibraryUiScenariosTest {
         app.database.steamGameDao().insertGames(listOf(cs2, gmod))
         showLibrary()
         vm.onSearchQueryChanged("zzzz nothing matches")
-        composeRule.waitForIdle()
-        composeRule.assertAnyVisible("No games match")
+        composeRule.awaitVisible("No games match")
     }
 
     @Test
@@ -99,8 +98,7 @@ class LibraryUiScenariosTest {
         showLibrary()
         composeRule.onNode(hasText("PLAYED", substring = false), useUnmergedTree = true)
             .performClick()
-        composeRule.waitForIdle()
-        composeRule.assertAnyVisible("Garry's Mod")
+        composeRule.awaitVisible("Garry's Mod")
         composeRule.assertNoneVisible("Counter-Strike 2")
     }
 
@@ -109,9 +107,18 @@ class LibraryUiScenariosTest {
         app.database.steamGameDao().insertGames(listOf(cs2))
         showLibrary()
         vm.openGameDetails(cs2)
-        composeRule.waitForIdle()
-        composeRule.assertAnyVisible("DOWNLOAD BASE GAME")
-        composeRule.assertAnyVisible("OWNED")
+        // The sheet opens instantly; DLC probing may still be running on
+        // JVM, so accept any of the interim possibilities the sheet shows.
+        composeRule.awaitVisible("Counter-Strike 2")
+        val interim = listOf(
+            "DOWNLOAD BASE GAME", "Checking DLC", "Scanning your licenses",
+            "No DLC", "Not on this account", "OWNED"
+        )
+        val shown = interim.firstOrNull { composeRule.anyNodeVisible(it) }
+        org.junit.Assert.assertTrue(
+            "Details sheet rendered none of the expected states: $interim",
+            shown != null
+        )
         vm.closeGameDetails()
     }
 

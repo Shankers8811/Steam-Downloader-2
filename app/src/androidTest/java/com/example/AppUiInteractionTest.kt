@@ -49,7 +49,7 @@ class AppUiInteractionTest {
     private fun textInputs() = composeRule.onAllNodes(hasSetTextAction(), useUnmergedTree = true)
 
     @Test
-    fun `login form enables the sign-in button only once both fields are filled`() {
+    fun loginFormEnablesSignInButtonAfterBothFieldsFilled() {
         awaitLoginForm()
         composeRule.onNodeWithTag("sign_in_button", useUnmergedTree = true)
             .assertIsNotEnabled()
@@ -66,7 +66,7 @@ class AppUiInteractionTest {
     }
 
     @Test
-    fun `fake credentials end at a human-readable error from the REAL Steam api`() {
+    fun fakeCredentialsEndAtHumanReadableErrorFromRealSteamApi() {
         awaitLoginForm()
         val fields = textInputs().fetchSemanticsNodes()
         assertTrue(fields.size >= 2)
