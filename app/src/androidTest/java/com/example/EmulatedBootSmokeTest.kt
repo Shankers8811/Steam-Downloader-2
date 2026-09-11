@@ -1,9 +1,12 @@
 package com.example
 
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -41,12 +44,44 @@ class EmulatedBootSmokeTest {
 
     @Test
     fun authScreenRendersForSignedOutUser() {
-        composeRule.waitForIdle()
-        composeRule.onNode(hasText("SIGN IN WITH STEAM", ignoreCase = true))
-            .assertIsDisplayed()
-        composeRule.onNode(hasText("ACCOUNT SIGN-IN", ignoreCase = true))
-            .assertIsDisplayed()
-        composeRule.onNodeWithText("Steam account name", substring = true)
-            .assertIsDisplayed()
+        // Fresh install: no remembered session, so the auth screen must
+        // appear — but only after the startup session-restore tick. Wait
+        // up to 25 s on the cold emulator instead of asserting against the
+        // very first composed frame. Using the unmerged tree so a styled
+        // button label (a child Text inside the button) is matchable.
+        val anchors = listOf("SIGN IN WITH STEAM", "ACCOUNT SIGN-IN", "Steam account name")
+        val deadlineMs = System.currentTimeMillis() + 25_000
+        var found: String? = null
+        while (System.currentTimeMillis() < deadlineMs && found == null) {
+            found = anchors.firstOrNull { anchor ->
+                runCatching {
+                    composeRule.onAllNodesWithText(anchor, substring = true,
+                        ignoreCase = true, useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }.getOrDefault(false)
+            }
+            if (found == null) Thread.sleep(500)
+        }
+        // If nothing matched, dump every on-screen text into the failure so
+        // the CI log (and the PR verdict comment) tells us what IS rendered.
+        val visible = runCatching {
+            composeRule.onRoot(useUnmergedTree = true).fetchSemanticsNode().allTexts()
+        }.getOrDefault(listOf("(<no semantics tree readable>)"))
+        assertTrue(
+            "Auth screen did not render: no sign-in anchor found within 25s. " +
+                "Visible texts: ${visible.take(30)}",
+            found != null
+        )
+        composeRule.onNodeWithText(found!!, substring = true,
+            ignoreCase = true, useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    private fun SemanticsNode.allTexts(): List<String> {
+        val mine = runCatching {
+            config.getOrNull(SemanticsProperties.Text)
+                ?.joinToString(" | ") { it.text }
+        }.getOrNull()
+        val rest = children.flatMap { it.allTexts() }
+        return listOfNotNull(mine) + rest
     }
 }
