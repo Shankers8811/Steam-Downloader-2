@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.ScenarioTestHarness.assertAnyVisible
@@ -107,8 +110,19 @@ class LibraryUiScenariosTest {
     fun `populated shelf renders games with the store tabs`() = runBlocking {
         seed(listOf(cs2, gmod))
         showLibrary()
+        // Grid virtualization is real even in a tall test box: the hero card
+        // (most played = Garry's Mod) composes first, remaining capsules only
+        // after scrolling forward — exactly what a human does.
+        composeRule.awaitVisible("Garry's Mod")
+        val grid = composeRule.onAllNodes(
+            SemanticsMatcher.keyIsSet(SemanticsActions.ScrollToIndexAction),
+            useUnmergedTree = true
+        ).onFirst()
+        grid.performScrollToIndex(1)
+        composeRule.waitForIdle()
+        grid.performScrollToIndex(2)
+        composeRule.waitForIdle()
         composeRule.awaitVisible("Counter-Strike 2")
-        composeRule.assertAnyVisible("Garry's Mod")
         composeRule.assertAnyVisible("ALL GAMES")
         composeRule.assertAnyVisible("PLAYED")
         composeRule.assertAnyVisible("NEVER PLAYED")
