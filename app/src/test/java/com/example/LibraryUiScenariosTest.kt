@@ -4,12 +4,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.ScenarioTestHarness.assertAnyVisible
@@ -114,13 +114,9 @@ class LibraryUiScenariosTest {
         // (most played = Garry's Mod) composes first, remaining capsules only
         // after scrolling forward — exactly what a human does.
         composeRule.awaitVisible("Garry's Mod")
-        val grid = composeRule.onAllNodes(
-            SemanticsMatcher.keyIsSet(SemanticsActions.ScrollToIndexAction),
-            useUnmergedTree = true
-        ).onFirst()
-        grid.performScrollToIndex(1)
-        composeRule.waitForIdle()
-        grid.performScrollToIndex(2)
+        val grid = composeRule.onAllNodes(hasScrollAction(), useUnmergedTree = true)
+            .onFirst()
+        grid.performScrollToNode(hasText("Counter-Strike 2"))
         composeRule.waitForIdle()
         composeRule.awaitVisible("Counter-Strike 2")
         composeRule.assertAnyVisible("ALL GAMES")
