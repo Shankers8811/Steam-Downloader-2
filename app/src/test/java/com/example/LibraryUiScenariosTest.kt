@@ -17,9 +17,11 @@ import com.example.ScenarioTestHarness.setFlow
 import com.example.data.db.SteamGameEntity
 import com.example.ui.screens.library.LibraryScreen
 import com.example.ui.screens.library.LibraryViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -60,8 +62,10 @@ class LibraryUiScenariosTest {
     )
 
     /** Clear-then-seed with a read-back confirmation so no row can leak
-     *  from a previous test and composition starts from known data. */
-    private suspend fun seed(games: List<SteamGameEntity>) {
+     *  from a previous test and composition starts from known data. The
+     *  JUnit thread is the app's main thread under Robolectric, so all
+     *  direct Room calls are moved onto Dispatchers.IO. */
+    private suspend fun seed(games: List<SteamGameEntity>) = withContext(Dispatchers.IO) {
         app.database.clearAllTables()
         var rows = app.database.steamGameDao().getAllGames().first()
         var guard = 0
