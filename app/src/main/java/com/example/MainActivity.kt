@@ -19,10 +19,15 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -66,20 +71,44 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = EditorialBackground
                 ) {
-                    when (authState) {
-                        // Restoring a remembered session ("keep me signed in")
-                        AuthState.Restoring -> Bootsplash()
+                    // App-wide error surfacing: anything the global coroutine
+                    // handler catches shows up here as a snackbar over the
+                    // current screen (instead of failing silently). The full
+                    // trace is in CrashLog (🐞 Report dialog).
+                    val snackbarHostState = remember { SnackbarHostState() }
+                    val latestError by AppErrors.latest.collectAsStateWithLifecycle()
+                    LaunchedEffect(latestError) {
+                        val message = latestError ?: return@LaunchedEffect
+                        snackbarHostState.showSnackbar(
+                            message = message,
+                            duration = SnackbarDuration.Long
+                        )
+                        AppErrors.clear()
+                    }
 
-                        // Not signed in → Steam-style login (password + Steam Guard)
-                        is AuthState.LoggedOut,
-                        is AuthState.Busy,
-                        is AuthState.AwaitingGuard,
-                        is AuthState.Error -> LoginScreen(viewModel = authViewModel)
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        when (authState) {
+                            // Restoring a remembered session ("keep me signed in")
+                            AuthState.Restoring -> Bootsplash()
 
-                        // Signed in → library + downloader tabs
-                        is AuthState.LoggedIn -> DepotDownloaderAppMain(
-                            libraryViewModel = libraryViewModel,
-                            downloaderViewModel = downloaderViewModel
+                            // Not signed in → Steam-style login (password + Steam Guard)
+                            is AuthState.LoggedOut,
+                            is AuthState.Busy,
+                            is AuthState.AwaitingGuard,
+                            is AuthState.Error -> LoginScreen(viewModel = authViewModel)
+
+                            // Signed in → library + downloader tabs
+                            is AuthState.LoggedIn -> DepotDownloaderAppMain(
+                                libraryViewModel = libraryViewModel,
+                                downloaderViewModel = downloaderViewModel
+                            )
+                        }
+
+                        SnackbarHost(
+                            hostState = snackbarHostState,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
                         )
                     }
                 }

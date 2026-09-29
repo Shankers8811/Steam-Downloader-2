@@ -3,10 +3,14 @@ name: Emulated app smoke tests
 # Self-drives the app on a real API-34 Android emulator (GitHub runner, KVM)
 # plus JVM/Robolectric engine tests — the agent's emulation rig to catch
 # device-only bugs without needing anyone's Steam account. Every failure
-# detail is echoed back into a PR #1 comment (log hosts are unreliable).
+# detail is echoed back into a comment on the pull request for the branch
+# (log hosts are unreliable from the dev sandbox). JVM runs also record the
+# Roborazzi UI screenshots used by the README.
 on:
   push:
-    branches: [ "arena/01a0859b-steam-downloader-2" ]
+    branches: [ "main", "arena/01a0859b-steam-downloader-2", "arena/01a0eb1f-steam-downloader-2" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -15,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
-      contents: read
+      contents: write  # push the 'screenshots' branch (README screenshot transport)
       issues: write
       pull-requests: write
     steps:
@@ -34,7 +38,13 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # v3 installs the retired legacy "tools" SDK package by default and
+        # dies with "Failed to find package 'tools'" (Google removed it from
+        # the SDK manifest in Sept 2026). v4 defaults to platform-tools only;
+        # the exact packages each job needs are installed in the next step.
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Accept licenses & install required SDK packages
         run: |
@@ -46,20 +56,57 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Run Robolectric unit tests
+      - name: Run Robolectric unit tests (also records the README UI screenshots)
         run: |
           set +e
-          gradle --no-daemon :app:testDebugUnitTest 2>&1 | tee unit-tests.log
+          gradle --no-daemon :app:testDebugUnitTest -Proborazzi.test.record=true 2>&1 | tee unit-tests.log
           exit ${PIPESTATUS[0]}
 
-      - name: Report unit-test verdict to PR #1
+      - name: Upload UI screenshots (Roborazzi)
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: app/src/test/screenshots/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish README screenshots to the 'screenshots' branch (git-readable channel)
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Artifact/blob hosts are unreachable from the dev sandbox, but git
+          # transport is not — mirror the PNGs to a force-pushed 'screenshots'
+          # branch (same pattern as 'apk-builds') so they can be fetched with
+          # git and committed into docs/screenshots/ for the README.
+          ls app/src/test/screenshots/*.png >/dev/null 2>&1 || exit 0
+          DIST=$(mktemp -d)
+          cp app/src/test/screenshots/*.png "$DIST/"
+          cd "$DIST"
+          git init -q
+          git config user.name "arena-ci[bot]"
+          git config user.email "arena-ci[bot]@users.noreply.github.com"
+          git checkout -q -b screenshots
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git add *.png
+          git commit -q -m "UI screenshots — run ${{ github.run_id }} (commit ${{ github.sha }})"
+          git push --force origin screenshots
+
+      - name: Report unit-test verdict to the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
           set +e
+          NUM="${EVENT_PR}"
+          if [ -z "$NUM" ]; then
+            NUM=$(gh pr list --repo "${{ github.repository }}" --head "$GITHUB_REF_NAME" --state all --json number --jq '.[0].number // ""')
+          fi
+          [ -z "$NUM" ] && NUM=1
           if [ -f unit-tests.log ] && grep -qE "BUILD SUCCESSFUL" unit-tests.log; then
-            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body "✅ Robolectric engine tests passed (commit ${{ github.sha }})."
+            gh issue comment "$NUM" --repo "${{ github.repository }}" --body "✅ Robolectric engine tests passed (commit ${{ github.sha }})."
             exit 0
           fi
           {
@@ -82,7 +129,7 @@ jobs:
             tail -n 40 unit-tests.log
             echo '```'
           } > pr-comment.md 2>&1 || true
-          OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
+          OUT=$(gh issue comment "$NUM" --repo "${{ github.repository }}" --body-file pr-comment.md 2>&1)
           if [ $? -ne 0 ]; then
             printf '::error title=PR-comment-failed::%s\n' "$(echo "$OUT" | head -c 400)"
           fi
@@ -120,7 +167,13 @@ jobs:
           ls -l /dev/kvm || true
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # v3 installs the retired legacy "tools" SDK package by default and
+        # dies with "Failed to find package 'tools'" (Google removed it from
+        # the SDK manifest in Sept 2026). v4 defaults to platform-tools only;
+        # the exact packages each job needs are installed in the next step.
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install emulator, system image and platform packages
         run: |
@@ -140,12 +193,18 @@ jobs:
           bash scripts/emu-smoke.sh 2>&1 | tee emulator-tests.log
           exit ${PIPESTATUS[0]}
 
-      - name: Report emulation verdict to PR #1
+      - name: Report emulation verdict to the PR
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
         run: |
           set +e
+          NUM="${EVENT_PR}"
+          if [ -z "$NUM" ]; then
+            NUM=$(gh pr list --repo "${{ github.repository }}" --head "$GITHUB_REF_NAME" --state all --json number --jq '.[0].number // ""')
+          fi
+          [ -z "$NUM" ] && NUM=1
           if [ -f emulator-tests.log ] && grep -q "INSTRUMENTATION_OK" emulator-tests.log; then
             {
               echo "✅ Emulated APK smoke tests passed on API-34 emulator (commit ${{ github.sha }})."
@@ -153,7 +212,7 @@ jobs:
               grep -aE "INSTRUMENTATION_OK|PASSED|OK    |BUILD SUCCESSFUL" emulator-tests.log | head -30
               echo '```'
             } > pr-comment.md
-            gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md
+            gh issue comment "$NUM" --repo "${{ github.repository }}" --body-file pr-comment.md
             exit 0
           fi
           {
@@ -168,7 +227,7 @@ jobs:
             tail -n 120 emulator-tests.log
             echo '```'
           } > pr-comment.md 2>&1 || true
-          OUT=$(gh issue comment 1 --repo Shankers8811/Steam-Downloader-2 --body-file pr-comment.md 2>&1)
+          OUT=$(gh issue comment "$NUM" --repo "${{ github.repository }}" --body-file pr-comment.md 2>&1)
           if [ $? -ne 0 ]; then
             printf '::error title=PR-comment-failed::%s\n' "$(echo "$OUT" | head -c 400)"
           fi

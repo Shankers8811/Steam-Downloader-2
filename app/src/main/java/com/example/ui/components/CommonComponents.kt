@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -83,6 +84,7 @@ fun WhiteTextField(
     placeholder: String = "",
     singleLine: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     trailingIcon: @Composable (() -> Unit)? = null,
     leadingIcon: @Composable (() -> Unit)? = null
 ) {
@@ -101,6 +103,7 @@ fun WhiteTextField(
             placeholder = { Text(placeholder, color = Color(0xA071717A), fontSize = 13.sp) },
             singleLine = singleLine,
             visualTransformation = visualTransformation,
+            keyboardOptions = keyboardOptions,
             trailingIcon = trailingIcon,
             leadingIcon = leadingIcon,
             shape = RoundedCornerShape(16.dp),

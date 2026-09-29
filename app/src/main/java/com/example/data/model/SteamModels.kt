@@ -3,24 +3,31 @@ package com.example.data.model
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
+// NOTE on the `@param:Json` use-site targets: without an explicit target the
+// Kotlin compiler warns that `@Json` is ambiguous between the constructor
+// parameter and the backing field (it silently picks `param`). Spelling out
+// `@param:` keeps exactly the behaviour Moshi's codegen already relied on and
+// silences the warnings — do NOT switch these to `@field:`, Moshi reads the
+// generated adapters' names from the constructor parameters.
+
 @JsonClass(generateAdapter = true)
 data class GetOwnedGamesResponse(
-    @Json(name = "response") val response: OwnedGamesData?
+    @param:Json(name = "response") val response: OwnedGamesData?
 )
 
 @JsonClass(generateAdapter = true)
 data class OwnedGamesData(
-    @Json(name = "game_count") val gameCount: Int? = 0,
-    @Json(name = "games") val games: List<SteamGameDto>? = emptyList()
+    @param:Json(name = "game_count") val gameCount: Int? = 0,
+    @param:Json(name = "games") val games: List<SteamGameDto>? = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
 data class SteamGameDto(
-    @Json(name = "appid") val appid: Int,
-    @Json(name = "name") val name: String? = null,
-    @Json(name = "playtime_forever") val playtimeForever: Int? = 0,
-    @Json(name = "img_icon_url") val imgIconUrl: String? = null,
-    @Json(name = "has_community_visible_stats") val hasCommunityVisibleStats: Boolean? = false
+    @param:Json(name = "appid") val appid: Int,
+    @param:Json(name = "name") val name: String? = null,
+    @param:Json(name = "playtime_forever") val playtimeForever: Int? = 0,
+    @param:Json(name = "img_icon_url") val imgIconUrl: String? = null,
+    @param:Json(name = "has_community_visible_stats") val hasCommunityVisibleStats: Boolean? = false
 ) {
     fun getHeaderImageUrl(): String {
         return "https://cdn.akamai.steamstatic.com/steam/apps/$appid/header.jpg"
@@ -38,19 +45,19 @@ data class SteamGameDto(
 /** IUserService/CheckAppOwnership — per-app license lookup for the signed-in account. */
 @JsonClass(generateAdapter = true)
 data class CheckAppOwnershipResponse(
-    @Json(name = "response") val response: AppOwnershipWrap?
+    @param:Json(name = "response") val response: AppOwnershipWrap?
 )
 
 @JsonClass(generateAdapter = true)
 data class AppOwnershipWrap(
-    @Json(name = "appownership") val appOwnership: AppOwnership?
+    @param:Json(name = "appownership") val appOwnership: AppOwnership?
 )
 
 @JsonClass(generateAdapter = true)
 data class AppOwnership(
-    @Json(name = "ownsapp") val ownsApp: Boolean? = null,
-    @Json(name = "permanent") val permanent: Boolean? = null,
-    @Json(name = "ownersteamid") val ownerSteamId: String? = null
+    @param:Json(name = "ownsapp") val ownsApp: Boolean? = null,
+    @param:Json(name = "permanent") val permanent: Boolean? = null,
+    @param:Json(name = "ownersteamid") val ownerSteamId: String? = null
 )
 
 enum class DlcMode {
