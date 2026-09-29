@@ -1,12 +1,9 @@
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
-  alias(libs.plugins.google.services)
 }
 
 android {
@@ -31,8 +28,16 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
+    // Shared debug signing: a FIXED keystore committed to the repo, so EVERY
+    // build (CI runner, any developer machine, today or next year) signs debug
+    // APKs with the same certificate. That lets an installed debug APK update
+    // in place instead of Android rejecting installs for signature mismatch.
+    // (The old default — an auto-generated key per machine — is what made
+    // every CI build un-installable over the previous one.)
+    // NEVER use this key for store releases: it is public in the repo.
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
+      storeType = "PKCS12"
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
@@ -51,6 +56,24 @@ android {
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
+  }
+  packaging {
+    resources {
+      // JavaSteam + protobuf + ktor ship signature/dup metadata files that break
+      // APK merging if not excluded.
+      excludes += setOf(
+        "META-INF/*.SF",
+        "META-INF/*.RSA",
+        "META-INF/*.DSA",
+        "META-INF/*.proto",
+        "META-INF/INDEX.LIST",
+        "META-INF/DEPENDENCIES",
+        "META-INF/LICENSE*",
+        "META-INF/NOTICE*",
+        "META-INF/license/**",
+        "META-INF/versions/**/OSGI-INF/**"
+      )
+    }
   }
   buildFeatures {
     compose = true
@@ -71,13 +94,10 @@ secrets {
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
 
-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
-
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -101,17 +121,42 @@ dependencies {
   implementation(libs.coil.compose)
   implementation("androidx.documentfile:documentfile:1.0.1")
   implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
-  // Uncomment to use Firestore:
-  // implementation(libs.firebase.firestore)
-
-  // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
-  // Sign-In via Credential Manager:
-  // implementation(libs.firebase.auth)
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
-  implementation(libs.firebase.appcheck.recaptcha)
+  // NOTE: This app is fully HMS-safe — no Firebase / Google Play services
+  // anywhere (target devices include Huawei phones without GMS; Firebase
+  // auto-init providers can kill cold start there). Nothing in app code uses
+  // firebase/google-services, so those template leftovers were removed.
+  // Native Steam (JavaSteam — see docs/GAMENATIVE_NOTES.md)
+  implementation(libs.`in`.dragonbra.javasteam)
+  implementation(libs.`in`.dragonbra.javasteam.depotdownloader)
+  // javasteam ships protobuf only on its RUNTIME classpath; our code refers
+  // to a protobuf-generated enum type (EAuthSessionGuardType), whose supertype
+  // (ProtocolMessageEnum) must also exist at COMPILE time. Version pinned to
+  // javasteam 1.8.0's own dependency.
+  implementation("com.google.protobuf:protobuf-java:4.31.1")
+  // Two more runtime-only classes the published javasteam pom does NOT bring
+  // along — caught on-device by the deep class check on the Nova 7i:
+  //   CryptoHelper.<clinit> does Class.forName("org.bouncycastle…BouncyCastleProvider")
+  //   -> ExceptionInInitializerError on EVERY sign-in attempt (the actual bug).
+  //   okio (KMP facade) never lands in the dex merge -> okhttp breaks at its
+  //   first HTTPS call (would have been the very next crash).
+  // Versions match javasteam 1.8.0's own version catalog.
+  implementation("org.bouncycastle:bcprov-jdk18on:1.83")
+  // Android crypto trap (user-verified on device): CryptoHelper's <clinit> tries
+  //   (1) Class.forName("org.spongycastle…BouncyCastleProvider") -> SEC_PROV="SC"
+  //   (2) else Class.forName("org.bouncycastle…BouncyCastleProvider") -> SEC_PROV="BC"
+  // On Android P+, branch (2) loads android's BOOTCLASSPATH SHIM class (same
+  // fully-qualified name always shadows our packaged bcprov jar) whose
+  // MessageDigest.SHA-1 was deliberately removed — DepotManifest then dies
+  // with "The BC provider no longer provides an implementation for
+  // MessageDigest.SHA-1" on the very first manifest (blocks ALL downloads).
+  // Shipping SpongyCastle makes branch (1) succeed: full SHA-1/AES/RSA from a
+  // package name the bootclasspath cannot intercept.
+  implementation("com.madgag.spongycastle:core:1.58.0.0")
+  implementation("com.madgag.spongycastle:prov:1.58.0.0")
+  implementation("com.squareup.okio:okio-jvm:3.16.0")
+  implementation(libs.com.github.luben.zstd.jni) { artifact { type = "aar" } }
+  implementation(libs.org.tukaani.xz)
+  implementation(libs.kotlinx.coroutines.jdk8)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
