@@ -2,9 +2,22 @@ name: Android APK (debug)
 
 # Builds a sideload-ready debug APK on every push and PR, and uploads it as a
 # downloadable artifact — no local Android Studio needed to get the APK.
+#
+# On pushes (never on PRs) the same APK is published as the repo's **latest
+# release** and force-pushed to the `apk-builds` branch, so both "give me the
+# newest APK" links below are always live and never change:
+#
+#   https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/DepotDownloader-debug.apk
+#   https://github.com/Shankers8811/Steam-Downloader-2/tree/apk-builds
+#
+# The release is re-published under one rolling tag (`debug-apk`) with
+# `make_latest: true` — NOT a pre-release. GitHub hides pre-releases behind a
+# toggle on the repo page and `/releases/latest/download/...` does not resolve
+# for them, which is why nobody could find the APK download. The notes still
+# say, loudly, that the build is debug-signed and testing-only.
 on:
   push:
-    branches: [ "main", "arena/01a0859b-steam-downloader-2" ]
+    branches: [ "main", "arena/01a0859b-steam-downloader-2", "arena/01a0eb1f-steam-downloader-2", "arena/01a0eb9b-steam-downloader-2" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -50,10 +63,37 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Build debug APK
+      - name: Compute the version stamp for this build
+        id: stamp
+        run: |
+          # One version scheme everywhere: 1.0.<workflow run number>.
+          # The run number only ever grows on this repo, so it doubles as the
+          # Android versionCode (what the OS checks to update in place) and as
+          # the human "which build is this" number on the release page.
+          VERSION_NAME="1.0.${GITHUB_RUN_NUMBER}"
+          VERSION_CODE="${GITHUB_RUN_NUMBER}"
+          SHORT_SHA="$(printf '%s' "${GITHUB_SHA}" | cut -c1-7)"
+          BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          {
+            echo "version_name=${VERSION_NAME}"
+            echo "version_code=${VERSION_CODE}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "build_date=${BUILD_DATE}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "VERSION_NAME=${VERSION_NAME}"
+            echo "VERSION_CODE=${VERSION_CODE}"
+            echo "SHORT_SHA=${SHORT_SHA}"
+            echo "BUILD_DATE=${BUILD_DATE}"
+          } >> "$GITHUB_ENV"
+          echo "Version stamp: ${VERSION_NAME} (code ${VERSION_CODE}, commit ${SHORT_SHA}, ${BUILD_DATE})"
+
+      - name: Build debug APK (stamped with this run's version)
         run: |
           set +e
-          gradle --no-daemon :app:assembleDebug 2>&1 | tee build.log
+          gradle --no-daemon :app:assembleDebug \
+            -PversionCodeOverride="${VERSION_CODE}" \
+            -PversionNameOverride="${VERSION_NAME}" 2>&1 | tee build.log
           exit ${PIPESTATUS[0]}
 
       - name: Report failure details to the PR (log tail, if any)
@@ -70,12 +110,42 @@ jobs:
           } > failure-report.md
           gh pr comment 1 --repo "${{ github.repository }}" --body-file failure-report.md || true
 
+      - name: Stage the APK, its version stamp and checksums
+        if: success()
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/DepotDownloader-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/DepotDownloader-${VERSION_NAME}-debug.apk"
+          {
+            echo "DepotDownloader Mobile — debug APK"
+            echo
+            echo "version:       ${VERSION_NAME}"
+            echo "versionCode:   ${VERSION_CODE}"
+            echo "commit:        ${SHORT_SHA}"
+            echo "built:         ${BUILD_DATE}"
+            echo "workflow run:  ${GITHUB_RUN_ID}"
+            echo
+            echo "always-newest download:"
+            echo "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/DepotDownloader-debug.apk"
+            echo
+            echo "The version shown above is what Android reports under"
+            echo "Settings ▸ Apps ▸ DepotDownloader ▸ App info after installing."
+          } > dist/VERSION.txt
+          cd dist
+          sha256sum DepotDownloader-debug.apk "DepotDownloader-${VERSION_NAME}-debug.apk" > SHA256SUMS.txt
+          cat VERSION.txt
+          echo
+          cat SHA256SUMS.txt
+
       - name: Upload debug APK artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: depotdownloader-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            dist/DepotDownloader-debug.apk
+            dist/VERSION.txt
+            dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -84,85 +154,113 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DIST=$(mktemp -d)
-          cp app/build/outputs/apk/debug/app-debug.apk "$DIST/DepotDownloader-debug.apk"
+          cd dist
           {
             echo "# DepotDownloader Mobile — debug APK"
             echo
-            echo "This branch (\`apk-builds\`) is the project's **rolling debug channel**:"
-            echo "every successful CI build force-pushes the newest debug-signed APK here"
-            echo "together with its SHA-256, for direct download without the Releases UI."
+            echo "**Version \`${VERSION_NAME}\`** — commit \`${SHORT_SHA}\`, built ${BUILD_DATE}."
             echo
-            echo "**Prefer the Releases page (it is marked a pre-release):**"
-            echo "https://github.com/${{ github.repository }}/releases/tag/debug-apk"
+            echo "This branch (\`apk-builds\`) is a **direct-download mirror** of the"
+            echo "project's rolling debug build: every successful CI run force-pushes"
+            echo "the newest debug-signed APK here together with its version stamp and"
+            echo "SHA-256, for downloading without the Releases UI."
+            echo
+            echo "**The Releases page is the recommended download — it always names the"
+            echo "current version:**"
+            echo "https://github.com/${{ github.repository }}/releases/latest"
+            echo
+            echo "| File | What it is |"
+            echo "| --- | --- |"
+            echo "| \`DepotDownloader-debug.apk\` | this build (stable filename) |"
+            echo "| \`DepotDownloader-${VERSION_NAME}-debug.apk\` | the same build, version pinned in the filename |"
+            echo "| \`VERSION.txt\` | version / versionCode / commit / build date |"
+            echo "| \`SHA256SUMS.txt\` | SHA-256 of both APKs |"
             echo
             echo "ℹ️ If GitHub shows \"Sorry about that, but we can't show files that are"
-            echo "this big right now\" — that is NORMAL for a 30MB APK. Click the **Raw**"
+            echo "this big right now\" — that is NORMAL for a 35MB APK. Click the **Raw**"
             echo "button at the top-right of that page to download the file."
             echo
-            echo "Auto-built by the Android APK (debug) workflow."
-            echo "Workflow run: ${{ github.run_id }}"
-            echo "Commit: ${{ github.sha }}"
-            echo
-            echo "SHA256:"
-            sha256sum "$DIST/DepotDownloader-debug.apk"
-          } > "$DIST/README.md"
-          cd "$DIST"
+            echo "Auto-built by the Android APK (debug) workflow — workflow run"
+            echo "${{ github.run_id }}, commit \`${GITHUB_SHA}\`."
+          } > README.md
           git init -q
           git config user.name "arena-ci[bot]"
           git config user.email "arena-ci[bot]@users.noreply.github.com"
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git checkout -q -b apk-builds
-          git add DepotDownloader-debug.apk README.md
-          git commit -q -m "DepotDownloader debug APK — run ${{ github.run_id }}" || true
+          git add -A
+          git commit -q -m "DepotDownloader debug APK ${VERSION_NAME} — run ${{ github.run_id }}" || true
           git push --force origin apk-builds
 
-      - name: Publish APK to a GitHub Release (clean download page)
+      - name: Write the release notes
         if: success() && github.event_name != 'pull_request'
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk DepotDownloader-debug.apk
-          sha256sum DepotDownloader-debug.apk > SHA256SUMS.txt
-          SHA256=$(cut -d' ' -f1 SHA256SUMS.txt)
-          cat > release-notes.md <<EOF
-          ## DepotDownloader Mobile — Debug APK (auto build)  🔶 PRE-RELEASE
+          # First line only — SHA256SUMS.txt lists two APKs (stable + versioned).
+          SHA256="$(head -n1 dist/SHA256SUMS.txt | cut -d' ' -f1)"
+          {
+            echo "## DepotDownloader Mobile — debug APK  **${VERSION_NAME}**  📱"
+            echo
+            echo "🔶 **Testing channel: this APK is debug-signed** (the certificate is public"
+            echo "in the repo). It is the project's rolling build — install it over a previous"
+            echo "build without uninstalling — but it is **not** a production release."
+            echo
+            echo "**Version \`${VERSION_NAME}\`** · versionCode \`${VERSION_CODE}\` · commit \`${SHORT_SHA}\` · built ${BUILD_DATE}"
+            echo
+            echo "This release is **re-published on every successful build on \`main\`** under"
+            echo "the same tag, so the link below is the permanent always-newest download:"
+            echo
+            echo "\`\`\`text"
+            echo "https://github.com/${{ github.repository }}/releases/latest/download/DepotDownloader-debug.apk"
+            echo "\`\`\`"
+            echo
+            echo "### Assets"
+            echo
+            echo "| Asset | What it is |"
+            echo "| --- | --- |"
+            echo "| \`DepotDownloader-debug.apk\` | the APK (stable filename — always the newest build) |"
+            echo "| \`DepotDownloader-${VERSION_NAME}-debug.apk\` | the same APK with the version in the filename |"
+            echo "| \`VERSION.txt\` | version, versionCode, commit, build date |"
+            echo "| \`SHA256SUMS.txt\` | SHA-256 of both APKs |"
+            echo
+            echo "### Install on any Android phone"
+            echo
+            echo "1. Download \`DepotDownloader-debug.apk\` below (on the phone itself is fastest)."
+            echo "2. Open the downloaded file → allow *Install unknown apps* if asked → **Install**."
+            echo "   Android 7.0+ (API 24). Installing over an older build just updates it —"
+            echo "   **Settings ▸ Apps ▸ DepotDownloader ▸ App info** shows the version above."
+            echo "3. Open the app → sign in with your Steam account (Steam Guard / 2FA supported)."
+            echo
+            echo "**SHA-256** (\`DepotDownloader-debug.apk\`):"
+            echo
+            echo "\`\`\`"
+            echo "${SHA256}"
+            echo "\`\`\`"
+            echo
+            echo "Also attached as \`SHA256SUMS.txt\`. Verify before installing if you downloaded"
+            echo "the APK over an untrusted network."
+            echo
+            echo "Build provenance: workflow run \`${{ github.run_id }}\`, commit \`${{ github.sha }}\`,"
+            echo "run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "Read the [README](https://github.com/${{ github.repository }}#install-the-apk)"
+            echo "for the full sign-in/2FA notes, install steps and disclaimer."
+          } > release-notes.md
+          cat release-notes.md
 
-          This is a **rolling pre-release**: every successful build on \`main\`
-          re-publishes this same tag, so what you download here is always the
-          newest debug build. The **\`apk-builds\` branch is the debug channel**
-          behind it — CI force-pushes the same APK there (\`DepotDownloader-debug.apk\`
-          + its checksum) on every run for direct/raw download without the
-          Releases UI.
-
-          **To install on any Android phone:**
-          1. Download \`DepotDownloader-debug.apk\` below (on the phone itself is fastest).
-          2. Open the downloaded file → allow *Install unknown apps* if asked → **Install**.
-          3. Open the app → sign in with your Steam account (Steam Guard / 2FA supported).
-
-          ⚠️ This APK is **debug-signed** (the certificate is public in this repo) —
-          fine for testing and for installing updates over previous builds, but it
-          must never be used for a production release. Android shows a one-time
-          "unknown source" warning because of this.
-
-          **SHA-256** of \`DepotDownloader-debug.apk\`:
-          \`\`\`
-          ${SHA256}
-          \`\`\`
-          Also attached as \`SHA256SUMS.txt\`. Verify before installing if you
-          downloaded the APK over an untrusted network.
-
-          Build provenance: workflow run \`${{ github.run_id }}\`, commit \`${{ github.sha }}\`.
-
-          Read the README for the full sign-in/2FA notes, install steps and disclaimer.
-          EOF
-      - name: Create/update the debug pre-release
+      - name: Create/update the rolling debug release (latest)
         if: success() && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: debug-apk
-          name: DepotDownloader — Debug APK (auto build)
-          prerelease: true
+          name: "DepotDownloader — Debug APK (latest: ${{ steps.stamp.outputs.version_name }})"
+          # NOT a pre-release: pre-releases are hidden behind a toggle on the
+          # repo page and /releases/latest/... does not resolve for them.
+          prerelease: false
+          make_latest: true
           draft: false
           files: |
-            DepotDownloader-debug.apk
-            SHA256SUMS.txt
+            dist/DepotDownloader-debug.apk
+            dist/DepotDownloader-${{ steps.stamp.outputs.version_name }}-debug.apk
+            dist/VERSION.txt
+            dist/SHA256SUMS.txt
           body_path: release-notes.md

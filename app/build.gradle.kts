@@ -5,6 +5,17 @@ plugins {
   alias(libs.plugins.roborazzi)
 }
 
+// ── Version stamps ───────────────────────────────────────────────────────────
+// CI passes -PversionCodeOverride=<run number> -PversionNameOverride=1.0.<run>
+// (see .github/workflows/android-apk.yml) so every APK published on the
+// Releases page / apk-builds branch carries a distinct, monotonically
+// increasing version — the number shown on the release page, in VERSION.txt
+// and by Android under Settings ▸ Apps ▸ DepotDownloader ▸ App info.
+// Local builds (Android Studio, `gradle :app:assembleDebug`, unit tests) fall
+// back to the defaults below, so nothing outside CI changes behavior.
+val ciVersionCode: Int? = (findProperty("versionCodeOverride") as String?)?.toIntOrNull()
+val ciVersionName: String? = findProperty("versionNameOverride") as String?
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -13,8 +24,8 @@ android {
     applicationId = "com.aistudio.depotdownloader.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = ciVersionCode ?: 1
+    versionName = ciVersionName ?: "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
