@@ -224,7 +224,7 @@ fun LoginScreen(viewModel: AuthViewModel) {
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Text,
                                 capitalization = KeyboardCapitalization.None,
-                                autoCorrect = false
+                                autoCorrectEnabled = false
                             ),
                             leadingIcon = {
                                 Icon(
@@ -251,7 +251,7 @@ fun LoginScreen(viewModel: AuthViewModel) {
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Password,
                                 capitalization = KeyboardCapitalization.None,
-                                autoCorrect = false
+                                autoCorrectEnabled = false
                             ),
                             leadingIcon = {
                                 Icon(
@@ -501,7 +501,7 @@ private fun SteamGuardCard(
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Text,
                     capitalization = KeyboardCapitalization.None,
-                    autoCorrect = false
+                    autoCorrectEnabled = false
                 ),
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
