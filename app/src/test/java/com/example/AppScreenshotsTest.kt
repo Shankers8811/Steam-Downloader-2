@@ -3,8 +3,11 @@ package com.example
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodes
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.example.ScenarioTestHarness.setFlow
 import com.example.data.auth.AuthState
@@ -32,7 +35,8 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Records the README screenshots from the REAL screens (Pixel 8 viewport,
  * native graphics) — no mock UI. Run with `-Proborazzi.test.record=true`
- * (CI does this and uploads `app/src/test/screenshots/` as an artifact).
+ * (CI does this, uploads the `ui-screenshots` artifact, and mirrors the PNGs
+ * to the git-readable `screenshots` branch).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -84,15 +88,24 @@ class AppScreenshotsTest {
             }
         }
         composeRule.waitForIdle()
+        // Type into the real fields so the primary button is enabled —
+        // exactly what a sign-in attempt looks like.
+        val editable = composeRule.onAllNodes(hasSetTextAction())
+        editable[0].performTextInput("gabe_newell")
+        editable[1].performTextInput("correcthorsebatterystaple")
+        composeRule.waitForIdle()
         composeRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/login.png")
     }
 
     @Test
     fun library_shelf() = runBlocking {
-        seed(shelf)
         val app = ApplicationProvider.getApplicationContext<DepotApplication>()
         // Signed-in header ("N games you own — <account>") exactly like a
-        // real session, without any network call.
+        // real session, without any login. The VM's one-shot auto-sync then
+        // fires against (unreachable) Steam and eventually stores 0 games —
+        // so we let it fully settle FIRST (compose + waitForIdle pumps it to
+        // completion), and only THEN seed the shelf. Nothing re-syncs after
+        // that (autoSyncAttempted is one-shot).
         setFlow(app.authManager, "_session", SteamSession(
             steamId = "76561197960435530",
             accountName = "gabe_newell",
@@ -108,10 +121,18 @@ class AppScreenshotsTest {
             }
         }
         composeRule.waitForIdle()
-        // The auto library-sync is still talking to (unreachable) Steam in the
-        // background — snapshot the settled UI state, not its in-flight noise.
-        setFlow(vm, "_isLoading", false)
+        seed(shelf)
+        // Self-heal: if the auto-sync's store landed after our seed (slow
+        // runner), the shelf would be empty again — re-verify and re-seed.
+        withContext(Dispatchers.IO) {
+            val rows = app.database.steamGameDao().getAllGames().first().size
+            if (rows != shelf.size) seed(shelf)
+        }
+        composeRule.waitForIdle()
+        // Clear the sync's leftover snackbar/spinner noise before the shot.
+        setFlow(vm, "_statusMessage", null)
         setFlow(vm, "_errorMessage", null)
+        setFlow(vm, "_isLoading", false)
         composeRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/library.png")
     }
 }
