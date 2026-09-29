@@ -71,6 +71,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Publish README screenshots to the 'screenshots' branch (git-readable channel)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Artifact/blob hosts are unreachable from the dev sandbox, but git
+          # transport is not — mirror the PNGs to a force-pushed 'screenshots'
+          # branch (same pattern as 'apk-builds') so they can be fetched with
+          # git and committed into docs/screenshots/ for the README.
+          ls app/src/test/screenshots/*.png >/dev/null 2>&1 || exit 0
+          DIST=$(mktemp -d)
+          cp app/src/test/screenshots/*.png "$DIST/"
+          cd "$DIST"
+          git init -q
+          git config user.name "arena-ci[bot]"
+          git config user.email "arena-ci[bot]@users.noreply.github.com"
+          git checkout -q -b screenshots
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git add *.png
+          git commit -q -m "UI screenshots — run ${{ github.run_id }} (commit ${{ github.sha }})"
+          git push --force origin screenshots
+
       - name: Report unit-test verdict to the PR
         if: always()
         env:
