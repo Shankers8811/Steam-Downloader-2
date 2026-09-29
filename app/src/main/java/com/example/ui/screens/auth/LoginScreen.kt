@@ -51,6 +51,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -216,6 +217,15 @@ fun LoginScreen(viewModel: AuthViewModel) {
                             onValueChange = { username = it },
                             label = "Steam account name",
                             placeholder = "gabe_newell",
+                            // Account names are case-sensitive and never
+                            // contain autocorrected words — keep the keyboard
+                            // from "helpfully" altering them (a classic source
+                            // of InvalidPassword logins).
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Text,
+                                capitalization = KeyboardCapitalization.None,
+                                autoCorrect = false
+                            ),
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Filled.Person,
@@ -235,6 +245,14 @@ fun LoginScreen(viewModel: AuthViewModel) {
                             visualTransformation =
                                 if (passwordVisible) VisualTransformation.None
                                 else PasswordVisualTransformation(),
+                            // No autocorrect/suggestions on the password box:
+                            // keyboard "corrections" silently change the
+                            // password and Steam answers InvalidPassword.
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                capitalization = KeyboardCapitalization.None,
+                                autoCorrect = false
+                            ),
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Filled.Lock,
@@ -359,7 +377,8 @@ fun LoginScreen(viewModel: AuthViewModel) {
             Spacer(modifier = Modifier.height(18.dp))
 
             Text(
-                text = "Your password is RSA-encrypted and sent only to api.steampowered.com — it is never stored. " +
+                text = "Your password is RSA-encrypted and sent only to Steam's sign-in servers — " +
+                    "it is never stored on this device. " +
                     "If your account is protected by Steam Guard you will be asked for the code from your Steam Mobile App next, just like signing in to the Steam app on Windows.",
                 fontSize = 11.sp,
                 color = androidx.compose.ui.graphics.Color(0x66FFFFFF),
@@ -369,7 +388,8 @@ fun LoginScreen(viewModel: AuthViewModel) {
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Not affiliated with Valve Corporation. Downloads only cover content your account is licensed for.",
+                text = "Unofficial app — not affiliated with Valve Corporation. " +
+                    "Your credentials are used only to sign in to Steam, and downloads only cover content your account owns.",
                 fontSize = 10.sp,
                 color = androidx.compose.ui.graphics.Color(0x44FFFFFF),
                 textAlign = TextAlign.Center
@@ -478,7 +498,11 @@ private fun SteamGuardCard(
                     textAlign = TextAlign.Center
                 ),
                 isError = guardError != null,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false
+                ),
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = androidx.compose.ui.graphics.Color(0xFFF4F4F5),
