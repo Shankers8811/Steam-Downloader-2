@@ -38,7 +38,13 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # v3 installs the retired legacy "tools" SDK package by default and
+        # dies with "Failed to find package 'tools'" (Google removed it from
+        # the SDK manifest in Sept 2026). v4 defaults to platform-tools only;
+        # the exact packages each job needs are installed in the next step.
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Accept licenses & install required SDK packages
         run: |
@@ -139,7 +145,13 @@ jobs:
           ls -l /dev/kvm || true
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # v3 installs the retired legacy "tools" SDK package by default and
+        # dies with "Failed to find package 'tools'" (Google removed it from
+        # the SDK manifest in Sept 2026). v4 defaults to platform-tools only;
+        # the exact packages each job needs are installed in the next step.
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install emulator, system image and platform packages
         run: |
