@@ -12,6 +12,31 @@ This release replaces the earlier web-only sign-in + simulated CDN with a
 native Steam session built exactly the way [GameNative](https://github.com/utkarshdalal/GameNative)
 runs Steam on Android — see [docs/GAMENATIVE_NOTES.md](docs/GAMENATIVE_NOTES.md).
 
+## ⬇️ Get the latest APK
+
+<a id="get-the-latest-apk"></a>
+
+<p>
+  <a href="https://github.com/Shankers8811/Steam-Downloader-2/releases/latest"><img src="https://img.shields.io/github/actions/workflow/status/Shankers8811/Steam-Downloader-2/android-apk.yml?branch=main&label=APK%20build" alt="APK build"></a>
+  <a href="https://github.com/Shankers8811/Steam-Downloader-2/releases/latest"><img src="https://img.shields.io/github/downloads/Shankers8811/Steam-Downloader-2/DepotDownloader-debug.apk/total?label=APK%20downloads&color=0084ff" alt="APK downloads"></a>
+  <img src="https://img.shields.io/badge/platform-Android%207.0%2B%20(API%2024%2B)-3ddc84" alt="Android 7.0+">
+</p>
+
+| Download | File | What you get |
+| --- | --- | --- |
+| 📱 **Android app (debug APK)** | [**Download the latest `DepotDownloader-debug.apk`**](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/DepotDownloader-debug.apk) | The newest build — **every successful build on `main` republishes the same [release](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest)**, so this link never goes stale |
+| 🏷️ **Version stamp** | [`VERSION.txt`](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/VERSION.txt) | Version name, build number, commit and build date of exactly that APK |
+| ✅ **Checksum** | [`SHA256SUMS.txt`](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/SHA256SUMS.txt) | SHA-256 of the APK — verify before installing |
+
+The release title names the current version (e.g. *latest: 1.0.57*), and each
+build also attaches a copy with the version in its filename
+(`DepotDownloader-1.0.57-debug.apk`). Everything here is **debug-signed** — a
+testing channel, not a store release; see the [Disclaimer](#disclaimer).
+The same APK is force-pushed to the
+[`apk-builds`](https://github.com/Shankers8811/Steam-Downloader-2/tree/apk-builds)
+branch as a direct-download fallback. Install steps:
+[Install the APK](#install-the-apk).
+
 ## Screenshots
 
 | Sign-in | Library |
@@ -87,17 +112,30 @@ a preview/testing channel, not a production release).
 
 ### 1. Get the APK
 
-* **Releases page (recommended)** — download `DepotDownloader-debug.apk` from
-  the [latest pre-release](https://github.com/Shankers8811/Steam-Downloader-2/releases/tag/debug-apk).
-  The same release carries `SHA256SUMS.txt` and the checksum inline in its
-  notes — verify it if you downloaded over an untrusted network.
-* **`apk-builds` branch (debug channel)** — CI force-pushes the newest
-  debug APK + checksum to the [`apk-builds`](https://github.com/Shankers8811/Steam-Downloader-2/tree/apk-builds)
-  branch on every successful build. That branch is the project's **rolling
-  debug channel**: whatever is there is the freshest automated build, meant
-  for direct download and sideload testing. If GitHub shows *"Sorry about
-  that, but we can't show files that are this big right now"* on the 30 MB
-  file, click **Raw** to download it.
+* **Releases page (recommended)** — the newest build is always the repo's
+  **[latest release](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest)**.
+  That release is republished on every successful build, so its title shows the
+  running version and these links always point at the newest APK:
+
+  | Asset | What it is |
+  | --- | --- |
+  | [`DepotDownloader-debug.apk`](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/DepotDownloader-debug.apk) | the APK (stable filename — always the newest build) |
+  | [`DepotDownloader-<version>-debug.apk`](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest) | the same APK with the version pinned in the filename (e.g. `DepotDownloader-1.0.57-debug.apk`) |
+  | [`VERSION.txt`](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/VERSION.txt) | version, versionCode, commit, build date |
+  | [`SHA256SUMS.txt`](https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/SHA256SUMS.txt) | SHA-256 of both APKs — verify if you downloaded over an untrusted network |
+
+* **Which version am I getting?** CI stamps every published build with
+  `1.0.<build number>`, and the same number is the APK's Android `versionCode`
+  — so a newer APK always installs as an in-place **update** over an older one
+  (same signing key). After installing, *Settings ▸ Apps ▸ DepotDownloader ▸
+  App info* shows that version, and `VERSION.txt` on the release carries the
+  same stamp plus the commit it was built from.
+* **`apk-builds` branch (direct download)** — CI force-pushes the newest
+  debug APK + `VERSION.txt` + checksum to the [`apk-builds`](https://github.com/Shankers8811/Steam-Downloader-2/tree/apk-builds)
+  branch on every successful build. That branch is a **mirror of the same
+  rolling build**, for downloading without the Releases UI. If GitHub shows
+  *"Sorry about that, but we can't show files that are this big right now"* on
+  the 35 MB file, click **Raw** to download it.
 * **Build it yourself** — Android Studio: *Build ▸ Build APK(s)*; or command
   line with JDK 17 + Android SDK: `gradle :app:assembleDebug` (the repo
   deliberately ships no wrapper; CI pins Gradle 9.3.1). More detail in
@@ -162,8 +200,11 @@ phone (use the in-app **🐞 Report** button if anything crashes):
   `DownloaderUiScenariosTest`, `DownloadEnginePersistenceTest`) run on every
   push together with an API-34 emulator boot smoke — see the two workflows in
   [`.github/workflows/`](.github/workflows).
-* CI also records the screenshots above (`AppScreenshotsTest`) and builds the
-  debug APK for every push.
+* CI also records the screenshots above (`AppScreenshotsTest`), builds the
+  debug APK for every push, and republishes the rolling
+  [latest release](#get-the-latest-apk) with that build — versioned
+  `1.0.<build number>`, checksummed, and mirrored to `apk-builds`. Only pushes
+  publish; pull requests just build and test.
 * Device-specific notes (Huawei Nova 7i / HMS, publishing options) live in
   [docs/TESTING.md](docs/TESTING.md); the architecture study for the native
   Steam stack is in [docs/GAMENATIVE_NOTES.md](docs/GAMENATIVE_NOTES.md).

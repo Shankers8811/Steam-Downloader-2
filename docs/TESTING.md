@@ -12,9 +12,13 @@ distribution notes.
 - **Command line (JDK 17 + Android SDK required):**
   `gradle :app:assembleDebug` — no wrapper ships with the repo by design; CI
   pins Gradle 9.3.1. Output: `app/build/outputs/apk/debug/app-debug.apk`.
-- **GitHub builds it for you:** every push produces the APK both as a
-  workflow artifact (`depotdownloader-debug-apk`) and on the `apk-builds`
-  branch / Releases pre-release.
+- **GitHub builds it for you:** every push produces the APK as a workflow
+  artifact (`depotdownloader-debug-apk`, with `VERSION.txt` + `SHA256SUMS.txt`)
+  and — on `main` — republishes the rolling **latest release** and force-pushes
+  the `apk-builds` branch mirror. CI also stamps the version: run
+  `gradle :app:assembleDebug -PversionCodeOverride=42 -PversionNameOverride=1.0.42`
+  to reproduce a published build's version locally (without the `-P` flags the
+  version stays the local default `1.0`/`1`).
 
 ## Huawei Nova 7i (EMUI / HMS, Android 10) specifics
 
@@ -34,8 +38,9 @@ Steam does **not** accept Android APKs at all — it ships Windows/macOS/Linux
 builds only, and Android is not a publishable platform on the Steam store.
 Your distribution options for this app are:
 
-- **Direct APK sharing** (what the Releases pre-release + `apk-builds` branch
-  do),
+- **Direct APK sharing** (what the rolling `debug-apk` release — published as
+  the repo's *latest release* so it is visible on the repo page — and the
+  `apk-builds` branch do),
 - **Google Play Console** — web UI upload, no Android Studio needed; new
   apps must upload an **AAB**, which `gradle :app:bundleRelease` produces
   (release signing needs `KEYSTORE_PATH` / `STORE_PASSWORD` / `KEY_PASSWORD`
