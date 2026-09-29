@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
-      contents: read
+      contents: write  # push the 'screenshots' branch (README screenshot transport)
       issues: write
       pull-requests: write
     steps:
