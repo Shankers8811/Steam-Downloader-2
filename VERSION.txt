@@ -1,0 +1,13 @@
+DepotDownloader Mobile — debug APK
+
+version:       1.0.114
+versionCode:   114
+commit:        20d22bb
+built:         2026-09-29 05:40 UTC
+workflow run:  36527198262
+
+always-newest download:
+https://github.com/Shankers8811/Steam-Downloader-2/releases/latest/download/DepotDownloader-debug.apk
+
+The version shown above is what Android reports under
+Settings ▸ Apps ▸ DepotDownloader ▸ App info after installing.
