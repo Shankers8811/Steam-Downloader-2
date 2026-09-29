@@ -81,10 +81,14 @@ jobs:
           DIST=$(mktemp -d)
           cp app/build/outputs/apk/debug/app-debug.apk "$DIST/DepotDownloader-debug.apk"
           {
-            echo "# DepotDownloader — debug APK"
+            echo "# DepotDownloader Mobile — debug APK"
             echo
-            echo "**The easiest way to download is the Releases page:**"
-            echo "https://github.com/${{ github.repository }}/releases/latest"
+            echo "This branch (\`apk-builds\`) is the project's **rolling debug channel**:"
+            echo "every successful CI build force-pushes the newest debug-signed APK here"
+            echo "together with its SHA-256, for direct download without the Releases UI."
+            echo
+            echo "**Prefer the Releases page (it is marked a pre-release):**"
+            echo "https://github.com/${{ github.repository }}/releases/tag/debug-apk"
             echo
             echo "ℹ️ If GitHub shows \"Sorry about that, but we can't show files that are"
             echo "this big right now\" — that is NORMAL for a 30MB APK. Click the **Raw**"
@@ -112,28 +116,47 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk DepotDownloader-debug.apk
           sha256sum DepotDownloader-debug.apk > SHA256SUMS.txt
-      - name: Create/update the debug release
+          SHA256=$(cut -d' ' -f1 SHA256SUMS.txt)
+          cat > release-notes.md <<EOF
+          ## DepotDownloader Mobile — Debug APK (auto build)  🔶 PRE-RELEASE
+
+          This is a **rolling pre-release**: every successful build on \`main\`
+          re-publishes this same tag, so what you download here is always the
+          newest debug build. The **\`apk-builds\` branch is the debug channel**
+          behind it — CI force-pushes the same APK there (\`DepotDownloader-debug.apk\`
+          + its checksum) on every run for direct/raw download without the
+          Releases UI.
+
+          **To install on any Android phone:**
+          1. Download \`DepotDownloader-debug.apk\` below (on the phone itself is fastest).
+          2. Open the downloaded file → allow *Install unknown apps* if asked → **Install**.
+          3. Open the app → sign in with your Steam account (Steam Guard / 2FA supported).
+
+          ⚠️ This APK is **debug-signed** (the certificate is public in this repo) —
+          fine for testing and for installing updates over previous builds, but it
+          must never be used for a production release. Android shows a one-time
+          "unknown source" warning because of this.
+
+          **SHA-256** of \`DepotDownloader-debug.apk\`:
+          \`\`\`
+          ${SHA256}
+          \`\`\`
+          Also attached as \`SHA256SUMS.txt\`. Verify before installing if you
+          downloaded the APK over an untrusted network.
+
+          Build provenance: workflow run \`${{ github.run_id }}\`, commit \`${{ github.sha }}\`.
+
+          Read the README for the full sign-in/2FA notes, install steps and disclaimer.
+          EOF
+      - name: Create/update the debug pre-release
         if: success() && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: debug-apk
           name: DepotDownloader — Debug APK (auto build)
-          prerelease: false
+          prerelease: true
           draft: false
           files: |
             DepotDownloader-debug.apk
             SHA256SUMS.txt
-          body: |
-            ## DepotDownloader — Debug APK (auto build)
-
-            **To install on any Android phone:**
-            1. Download `DepotDownloader-debug.apk` below (on the phone itself is fastest).
-            2. Open the downloaded file → allow *Install unknown apps* if asked → **Install**.
-            3. Open the app → sign in with your Steam account (2FA supported).
-
-            This APK is re-built automatically on every change and always overwrites
-            this release — it is unsigned for production (debug-signed), which is why
-            Android shows a one-time "unknown source" warning.
-
-            Build provenance: workflow run `${{ github.run_id }}`, commit `${{ github.sha }}`.
-            Verify the download with `SHA256SUMS.txt` if you want to be thorough.
+          body_path: release-notes.md
